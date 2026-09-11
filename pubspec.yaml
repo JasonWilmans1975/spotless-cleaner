@@ -1,0 +1,29 @@
+name: clean_cleaner
+description: "Spotless Solutions — cleaner app."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+
+  # Talks to the Spotless Solutions server's JSON API.
+  http: ^1.2.0
+  # Stores the logged-in cleaner's session token on-device.
+  shared_preferences: ^2.2.0
+  # Profile photo — pick from camera or gallery.
+  image_picker: ^1.1.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
