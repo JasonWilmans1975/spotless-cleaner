@@ -11,6 +11,8 @@ import 'package:clean_cleaner/screens/chat_screen.dart';
 import 'package:clean_cleaner/screens/edit_service_details_screen.dart';
 import 'package:clean_cleaner/screens/hours_screen.dart';
 import 'package:clean_cleaner/screens/job_screen.dart';
+import 'package:clean_cleaner/screens/profile_tab.dart';
+import 'package:clean_cleaner/screens/reviews_screen.dart';
 import 'package:clean_cleaner/screens/schedule_tab.dart';
 import 'package:clean_cleaner/screens/service_form.dart';
 import 'package:clean_cleaner/screens/services_tab.dart';
@@ -584,6 +586,105 @@ void main() {
       await tester.tap(find.text('08:00 – 16:00'));
       await tester.pumpAndSettle();
       expect(find.text('Monday hours'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  test('withAvatar keeps the bio and the booking pause', () {
+    final c = Cleaner.fromJson({'id': 1, 'name': 'Lucy', 'bio': 'Ten years', 'accepting_bookings': false, 'status': 'approved', 'active': 1});
+    final updated = c.withAvatar('https://x/1.jpg');
+    expect((updated.avatar, updated.bio, updated.acceptingBookings, updated.status), ('https://x/1.jpg', 'Ten years', false, 'approved'));
+  });
+
+  Review review(int rating, {String? comment, int tip = 0, List<String> tags = const []}) =>
+      Review(bookingId: rating, rating: rating, comment: comment, tipCents: tip, tags: tags, reviewerName: 'Emma R.', serviceName: 'Deep cleaning');
+
+  test('averageRating', () {
+    expect(averageRating([]), isNull);
+    expect(averageRating([review(5), review(4)]), 4.5);
+  });
+
+  for (final (width, scale) in [(375.0, 1.0), (375.0, 1.3), (430.0, 1.0)]) {
+    testWidgets('Profile lays out at ${width.toInt()}pt, text x$scale', (tester) async {
+      tester.view.physicalSize = Size(width * 3, 932 * 3);
+      tester.view.devicePixelRatio = 3;
+      tester.platformDispatcher.textScaleFactorTestValue = scale;
+      addTearDown(tester.view.reset);
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      for (final status in ['approved', 'pending']) {
+        await tester.pumpWidget(MaterialApp(
+          theme: SpotlessTheme.light(),
+          home: ProfileTab(
+            key: ValueKey(status),
+            cleaner: Cleaner.fromJson({
+              'id': 1,
+              'name': 'Liam Test',
+              'email': 'liam.test@example.com',
+              'phone': '07000 000000',
+              'address': '10 Corsica Avenue',
+              'postcode': 'SW1A 1AA',
+              'status': status,
+              'active': 1,
+            }),
+            onCleanerUpdated: (_) {},
+            onLogout: () async {},
+            upcomingCount: 2,
+            onOpenEarnings: () {},
+          ),
+        ));
+        await tester.pumpAndSettle();
+        expect(find.text(status == 'approved' ? 'Approved cleaner' : 'Awaiting approval'), findsOneWidget);
+        expect(find.text('New'), findsOneWidget); // no stats in tests
+        await tester.scrollUntilVisible(find.text('Log out'), 300, scrollable: find.byType(Scrollable).first);
+        expect(tester.takeException(), isNull);
+      }
+    });
+  }
+
+  testWidgets('Profile edit sheet keeps phone required and has the bio field', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      theme: SpotlessTheme.light(),
+      home: ProfileTab(
+        cleaner: Cleaner.fromJson({'id': 1, 'name': 'Liam', 'phone': '07000', 'address': 'A', 'postcode': 'B', 'status': 'approved'}),
+        onCleanerUpdated: (_) {},
+        onLogout: () async {},
+        onOpenEarnings: () {},
+      ),
+    ));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Edit'));
+    await tester.pumpAndSettle();
+    expect(find.text('About you (optional)'), findsOneWidget);
+    await tester.enterText(find.widgetWithText(TextFormField, 'Phone'), '');
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    expect(find.text('Required'), findsOneWidget);
+  });
+
+  for (final width in [375.0, 430.0]) {
+    testWidgets('Reviews list and empty state at ${width.toInt()}pt', (tester) async {
+      tester.view.physicalSize = Size(width * 3, 932 * 3);
+      tester.view.devicePixelRatio = 3;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(MaterialApp(
+        theme: SpotlessTheme.light(),
+        home: ReviewsScreen(
+          key: UniqueKey(),
+          loadReviews: () async => [
+            review(5, comment: 'Spotless, thank you!', tip: 500, tags: ['On time', 'Went the extra mile']),
+            review(4),
+          ],
+        ),
+      ));
+      await tester.pumpAndSettle();
+      expect(find.text('4.5 average · 2 reviews'), findsOneWidget);
+      expect(find.text('£5 tip'), findsOneWidget);
+      await tester.pumpWidget(MaterialApp(
+        theme: SpotlessTheme.light(),
+        home: ReviewsScreen(key: UniqueKey(), loadReviews: () async => const []),
+      ));
+      await tester.pumpAndSettle();
+      expect(find.text('No reviews yet'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
   }

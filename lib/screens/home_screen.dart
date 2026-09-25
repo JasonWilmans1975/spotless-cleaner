@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../api_client.dart';
+import '../format.dart';
 import '../ui/layout.dart';
 import 'job_screen.dart';
 import 'login_screen.dart';
@@ -178,7 +179,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     ),
                   ),
                   ServicesTab(cleanerId: _cleaner.id),
-                  ProfileTab(cleaner: _cleaner, onCleanerUpdated: _onCleanerUpdated, onLogout: _logout),
+                  ProfileTab(
+                    cleaner: _cleaner,
+                    onCleanerUpdated: _onCleanerUpdated,
+                    onLogout: _logout,
+                    upcomingCount: bookings
+                        .where((b) => b.status == 'confirmed' && b.date.compareTo(isoDate(DateTime.now())) >= 0)
+                        .length,
+                    onOpenEarnings: () => _selectTab(1),
+                  ),
                 ],
               ),
             ),

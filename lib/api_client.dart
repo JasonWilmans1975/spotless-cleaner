@@ -55,6 +55,21 @@ class Cleaner {
 
   bool get isPendingApproval => status == 'pending';
 
+  /// Same cleaner with a new photo — keeps every other field (bio, pause…).
+  Cleaner withAvatar(String? avatar) => Cleaner(
+        id: id,
+        name: name,
+        email: email,
+        phone: phone,
+        address: address,
+        postcode: postcode,
+        avatar: avatar,
+        status: status,
+        active: active,
+        bio: bio,
+        acceptingBookings: acceptingBookings,
+      );
+
   /// The avatar as something [NetworkImage] can actually load. Photos uploaded
   /// through the app are absolute Supabase Storage URLs; the seeded rows hold
   /// server-relative paths like '/images/avatars/sw.png' that nothing serves
