@@ -9,6 +9,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../api_client.dart';
 import '../format.dart';
 import '../ui/layout.dart';
+import 'earnings_tab.dart';
 import 'job_screen.dart';
 import 'login_screen.dart';
 import 'profile_tab.dart';
@@ -170,13 +171,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     unread: unreadByBooking(_messages),
                     onOpenJob: _openJob,
                   ),
-                  // TODO(redesign): step 9 — Earnings (07-earnings).
-                  const Center(
-                    child: EmptyState(
-                      icon: LucideIcons.chartColumn,
-                      title: 'Earnings',
-                      message: "Your earnings summary is on its way.",
-                    ),
+                  EarningsTab(
+                    bookings: bookings,
+                    loading: _loadingBookings && _bookings == null,
+                    onRefresh: _loadBookings,
+                    onOpenJob: _openJob,
                   ),
                   ServicesTab(cleanerId: _cleaner.id),
                   ProfileTab(

@@ -8,6 +8,7 @@ import 'package:clean_cleaner/links.dart';
 import 'package:clean_cleaner/main.dart';
 import 'package:clean_cleaner/screens/add_service_screen.dart';
 import 'package:clean_cleaner/screens/chat_screen.dart';
+import 'package:clean_cleaner/screens/earnings_tab.dart';
 import 'package:clean_cleaner/screens/edit_service_details_screen.dart';
 import 'package:clean_cleaner/screens/hours_screen.dart';
 import 'package:clean_cleaner/screens/job_screen.dart';
@@ -685,6 +686,82 @@ void main() {
       ));
       await tester.pumpAndSettle();
       expect(find.text('No reviews yet'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  group('earningsFor', () {
+    final now = DateTime(2026, 9, 30, 10); // Wednesday
+    final list = [
+      job(1, '2026-09-29', 'completed', price: 4400, minutes: 120), // Tue
+      job(2, '2026-09-30', 'confirmed', price: 2400, minutes: 240), // Wed
+      job(3, '2026-09-30', 'pending', price: 9900), // a request — not booked, not in activity
+      job(4, '2026-10-01', 'cancelled', price: 3000), // in activity, not booked
+      job(5, '2026-09-02', 'completed', price: 1700, minutes: 60), // earlier this month
+      job(6, '2026-10-05', 'confirmed', price: 5000), // next week
+    ];
+    final reviews = [
+      Review(bookingId: 1, rating: 5, tipCents: 500, reviewerName: 'Emma R.'),
+      Review(bookingId: 5, rating: 4, tipCents: 200, reviewerName: 'Sam T.'),
+    ];
+
+    test('week', () {
+      final w = earningsFor(list, reviews, EarningsPeriod.week, now);
+      expect(w.label, 'This week · 28 Sep – 4 Oct');
+      expect((w.bookedCents, w.jobs, w.completedJobs, w.minutes, w.tipsCents, w.avgCents), (6800, 2, 1, 360, 500, 3400));
+      expect(w.bars.map((b) => b.label), ['M', 'T', 'W', 'T', 'F', 'S', 'S']);
+      expect(w.bars.map((b) => b.cents), [0, 4400, 2400, 0, 0, 0, 0]);
+      expect(w.activity.map((b) => b.id), [4, 2, 1]); // newest first, no requests
+    });
+
+    test('month', () {
+      final m = earningsFor(list, reviews, EarningsPeriod.month, now);
+      expect(m.label, 'This month · September 2026');
+      expect((m.bookedCents, m.jobs, m.tipsCents), (8500, 3, 700));
+      expect(m.bars.map((b) => b.label), ['1–7', '8–14', '15–21', '22–28', '29–30']);
+      expect(m.bars.map((b) => b.cents), [1700, 0, 0, 0, 6800]);
+    });
+
+    test('nothing booked', () {
+      final e = earningsFor(const [], const [], EarningsPeriod.week, now);
+      expect((e.bookedCents, e.avgCents), (0, 0));
+      expect(e.activity, isEmpty);
+    });
+  });
+
+  for (final (width, scale) in [(375.0, 1.0), (375.0, 1.3), (430.0, 1.0)]) {
+    testWidgets('Earnings lays out at ${width.toInt()}pt, text x$scale', (tester) async {
+      tester.view.physicalSize = Size(width * 3, 932 * 3);
+      tester.view.devicePixelRatio = 3;
+      tester.platformDispatcher.textScaleFactorTestValue = scale;
+      addTearDown(tester.view.reset);
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      final today = isoDate(DateTime.now());
+      Future<void> pump(List<CleanerBooking> bookings) async {
+        await tester.pumpWidget(MaterialApp(
+          theme: SpotlessTheme.light(),
+          home: EarningsTab(
+            key: UniqueKey(),
+            bookings: bookings,
+            loading: false,
+            onRefresh: () async {},
+            loadReviews: () async => [Review(bookingId: 1, rating: 5, tipCents: 500, reviewerName: 'Emma R.')],
+          ),
+        ));
+        await tester.pumpAndSettle();
+      }
+
+      await pump([job(1, today, 'completed', price: 12450), job(2, today, 'confirmed', price: 2400)]);
+      expect(find.text('£148.50'), findsNWidgets(2)); // hero total + today's bar (both jobs are today)
+      expect(find.text('2 jobs booked'), findsOneWidget);
+      await tester.tap(find.text('Month'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('This month'), findsOneWidget);
+      await tester.scrollUntilVisible(find.text('Activity'), 200, scrollable: find.byType(Scrollable).first);
+      expect(tester.takeException(), isNull);
+
+      await pump(const []);
+      await tester.scrollUntilVisible(find.textContaining('Nothing in this week'), 200, scrollable: find.byType(Scrollable).first);
       expect(tester.takeException(), isNull);
     });
   }
