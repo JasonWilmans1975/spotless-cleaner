@@ -9,6 +9,8 @@ import 'package:clean_cleaner/main.dart';
 import 'package:clean_cleaner/screens/chat_screen.dart';
 import 'package:clean_cleaner/screens/job_screen.dart';
 import 'package:clean_cleaner/screens/schedule_tab.dart';
+import 'package:clean_cleaner/screens/services_tab.dart';
+import 'package:clean_cleaner/service_icons.dart';
 import 'package:clean_cleaner/screens/home_screen.dart';
 import 'package:clean_cleaner/theme/spotless_theme.dart';
 import 'package:clean_cleaner/ui/debug_gallery.dart';
@@ -366,4 +368,75 @@ void main() {
     expect(send().onPressed, isNotNull);
     expect(tester.takeException(), isNull);
   });
+
+  test('parsePriceCents: blank or junk means "use the default"', () {
+    expect(parsePriceCents(''), isNull);
+    expect(parsePriceCents('  '), isNull);
+    expect(parsePriceCents('abc'), isNull);
+    expect(parsePriceCents('17'), 1700);
+    expect(parsePriceCents('£17.50'), 1750);
+    expect(parsePriceCents('22.999'), 2300);
+  });
+
+  test('service icons: known glyphs map to outline icons, others stay text', () {
+    expect(iconForGlyph('⌂'), isNotNull);
+    expect(iconForGlyph(' ✦ '), isNotNull);
+    expect(iconForGlyph(':)'), isNull);
+    expect(kServiceIcons.map((o) => o.glyph).toSet(), hasLength(6)); // no duplicate glyphs
+  });
+
+  testWidgets('ServiceIconTile draws an icon for known glyphs and text for old ones', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      theme: SpotlessTheme.light(),
+      home: const Scaffold(body: Row(children: [ServiceIconTile('⌂'), ServiceIconTile(':)')])),
+    ));
+    expect(find.byType(Icon), findsOneWidget);
+    expect(find.text(':)'), findsOneWidget);
+  });
+
+  testWidgets('My services shows a retryable error when loading fails', (tester) async {
+    await tester.pumpWidget(MaterialApp(theme: SpotlessTheme.light(), home: const ServicesTab(cleanerId: 1)));
+    await tester.pumpAndSettle();
+    expect(find.text('My services'), findsOneWidget);
+    expect(find.text("Couldn't load your services"), findsOneWidget);
+    expect(find.text('Try again'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final (width, scale) in [(375.0, 1.0), (375.0, 1.3), (430.0, 1.0)]) {
+    testWidgets('service card with every action fits at ${width.toInt()}pt, text x$scale', (tester) async {
+      tester.view.physicalSize = Size(width * 3, 932 * 3);
+      tester.view.devicePixelRatio = 3;
+      tester.platformDispatcher.textScaleFactorTestValue = scale;
+      addTearDown(tester.view.reset);
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      final service = MenuService.fromJson({
+        'id': 5,
+        'name': 'End-of-tenancy deep clean with oven',
+        'icon': '⇄',
+        'price_type': 'hourly',
+        'price_cents': 16000,
+        'created_by_cleaner_id': 1,
+      });
+      await tester.pumpWidget(MaterialApp(
+        theme: SpotlessTheme.light(),
+        home: Scaffold(
+          body: ListView(padding: const EdgeInsets.all(20), children: [
+            MyServiceCard(
+              service: service,
+              rate: MyServiceRate(serviceId: 5, priceCents: 2400),
+              busy: false,
+              onEditRate: () {},
+              onRemove: () {},
+              onEditDetails: () {},
+            ),
+          ]),
+        ),
+      ));
+      expect(find.text('Proposed by you'), findsOneWidget);
+      expect(find.text('Default £160'), findsOneWidget);
+      expect(find.text('£24'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  }
 }
