@@ -67,9 +67,9 @@
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>Take a photo for your cleaner profile picture.</string>
+	<string>Take photos for your profile picture and of your jobs (before and after).</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Choose a photo for your cleaner profile picture.</string>
+	<string>Choose photos for your profile picture and of your jobs (before and after).</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Required by the camera when taking a profile photo.</string>
 </dict>

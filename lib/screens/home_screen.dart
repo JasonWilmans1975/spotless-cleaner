@@ -8,6 +8,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../api_client.dart';
 import '../ui/layout.dart';
+import 'job_screen.dart';
 import 'login_screen.dart';
 import 'profile_tab.dart';
 import 'schedule_tab.dart';
@@ -103,6 +104,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   void _onCleanerUpdated(Cleaner updated) => setState(() => _cleaner = updated);
 
+  Future<void> _openJob(CleanerBooking booking) async {
+    final changed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (_) => JobScreen(booking: booking, allBookings: _bookings ?? const [])),
+    );
+    if (changed == true) _loadBookings();
+  }
+
   void _selectTab(int i) {
     if (i == _tabIndex) return;
     HapticFeedback.selectionClick();
@@ -159,7 +167,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     onCleanerUpdated: _onCleanerUpdated,
                     onOpenEarnings: () => _selectTab(1),
                     unread: unreadByBooking(_messages),
-                    // TODO(redesign): step 4 — onOpenJob opens Job details.
+                    onOpenJob: _openJob,
                   ),
                   // TODO(redesign): step 9 — Earnings (07-earnings).
                   const Center(

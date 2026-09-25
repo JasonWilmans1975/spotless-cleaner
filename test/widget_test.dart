@@ -6,6 +6,8 @@ import 'package:clean_cleaner/api_client.dart';
 import 'package:clean_cleaner/format.dart';
 import 'package:clean_cleaner/links.dart';
 import 'package:clean_cleaner/main.dart';
+import 'package:clean_cleaner/screens/chat_screen.dart';
+import 'package:clean_cleaner/screens/job_screen.dart';
 import 'package:clean_cleaner/screens/schedule_tab.dart';
 import 'package:clean_cleaner/screens/home_screen.dart';
 import 'package:clean_cleaner/theme/spotless_theme.dart';
@@ -269,5 +271,99 @@ void main() {
     expect(find.text('Not bookable yet'), findsOneWidget);
     final sw = tester.widget<Switch>(find.byType(Switch));
     expect((sw.value, sw.onChanged), (false, null));
+  });
+
+  CleanerBooking jobWith(Map<String, dynamic> extra) => CleanerBooking.fromJson({
+        'id': 21,
+        'ref': 'SS-504215',
+        'date': isoDate(DateTime.now()),
+        'start_time': '11:00',
+        'end_time': '13:00',
+        'status': 'confirmed',
+        'customer_name': 'Liam Customer',
+        'email': 'liam@example.com',
+        'phone': '0782814983',
+        'address': '10 Corsica Avenue',
+        'postcode': 'SW1A 1AA',
+        'price_cents': 4400,
+        'duration_minutes': 120,
+        'services': {'name': 'Deep cleaning', 'slug': 'deep', 'features': '["Dust all surfaces","Kitchen deep clean","Bathrooms descaled"]'},
+        ...extra,
+      });
+
+  group('job logic', () {
+    final now = DateTime(2026, 9, 30, 10);
+    test('jobPhase', () {
+      JobPhase phase(Map<String, dynamic> extra) => jobPhase(jobWith({'date': '2026-09-30', ...extra}), now);
+      expect(phase({'status': 'pending'}), JobPhase.request);
+      expect(phase({}), JobPhase.ready);
+      expect(phase({'date': '2026-10-02'}), JobPhase.upcoming);
+      expect(phase({'started_at': '2026-09-30T09:00:00Z'}), JobPhase.inProgress);
+      expect(phase({'status': 'completed'}), JobPhase.done);
+      expect(phase({'status': 'cancelled'}), JobPhase.cancelled);
+    });
+
+    test('elapsedText', () {
+      expect(elapsedText(const Duration(minutes: 12, seconds: 3)), '12:03');
+      expect(elapsedText(const Duration(hours: 1, minutes: 5, seconds: 9)), '1:05:09');
+    });
+  });
+
+  for (final width in [375.0, 430.0]) {
+    testWidgets('Job details lays out in every phase at ${width.toInt()}pt', (tester) async {
+      tester.view.physicalSize = Size(width * 3, 932 * 3);
+      tester.view.devicePixelRatio = 3;
+      addTearDown(tester.view.reset);
+      Future<void> pumpJob(Map<String, dynamic> extra, String expected) async {
+        await tester.pumpWidget(MaterialApp(theme: SpotlessTheme.light(), home: JobScreen(key: UniqueKey(), booking: jobWith(extra))));
+        await tester.pump(const Duration(seconds: 1));
+        expect(find.text(expected), findsOneWidget);
+        final list = find.byType(Scrollable).first;
+        for (var i = 0; i < 4; i++) {
+          await tester.drag(list, const Offset(0, -400));
+          await tester.pump(const Duration(milliseconds: 500));
+        }
+        expect(tester.takeException(), isNull);
+      }
+
+      await pumpJob({}, 'Start job'); // ready today
+      await pumpJob({'started_at': DateTime.now().subtract(const Duration(minutes: 12)).toUtc().toIso8601String()}, 'Finish job');
+      await pumpJob({'status': 'completed'}, 'Job completed');
+      await pumpJob({'status': 'pending'}, 'Awaiting your answer');
+      await pumpJob({'status': 'cancelled'}, 'Cancelled');
+      await tester.pumpWidget(const SizedBox()); // stop the in-progress ticker
+    });
+  }
+
+  testWidgets('Job details: start is locked before the day; checklist ticks count up', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      theme: SpotlessTheme.light(),
+      home: JobScreen(booking: jobWith({'id': 22, 'date': isoDate(DateTime.now().add(const Duration(days: 2)))})),
+    ));
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.text('You can start on the day of the clean.'), findsOneWidget);
+    expect(tester.widget<FilledButton>(find.widgetWithText(FilledButton, 'Start job')).onPressed, isNull);
+    expect(find.byTooltip('Call customer'), findsOneWidget);
+    expect(find.text('Navigate'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('Kitchen deep clean'), 200, scrollable: find.byType(Scrollable).first);
+    expect(find.text('0 of 3 done'), findsOneWidget);
+    await tester.tap(find.text('Kitchen deep clean'));
+    await tester.pump();
+    expect(find.text('1 of 3 done'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('Chat screen lays out with quick replies and a send button', (tester) async {
+    await tester.pumpWidget(MaterialApp(theme: SpotlessTheme.light(), home: ChatScreen(booking: jobWith({}))));
+    await tester.pumpAndSettle();
+    expect(find.text('Liam Customer'), findsOneWidget);
+    expect(find.text('On my way'), findsOneWidget);
+    expect(find.text("Couldn't load messages"), findsOneWidget); // no Supabase in tests
+    IconButton send() => tester.widget<IconButton>(find.ancestor(of: find.byTooltip('Send'), matching: find.byType(IconButton)));
+    expect(send().onPressed, isNull);
+    await tester.enterText(find.byType(TextField), 'Running 5 minutes late');
+    await tester.pump();
+    expect(send().onPressed, isNotNull);
+    expect(tester.takeException(), isNull);
   });
 }
