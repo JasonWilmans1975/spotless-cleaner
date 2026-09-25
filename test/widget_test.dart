@@ -6,9 +6,12 @@ import 'package:clean_cleaner/api_client.dart';
 import 'package:clean_cleaner/format.dart';
 import 'package:clean_cleaner/links.dart';
 import 'package:clean_cleaner/main.dart';
+import 'package:clean_cleaner/screens/add_service_screen.dart';
 import 'package:clean_cleaner/screens/chat_screen.dart';
+import 'package:clean_cleaner/screens/edit_service_details_screen.dart';
 import 'package:clean_cleaner/screens/job_screen.dart';
 import 'package:clean_cleaner/screens/schedule_tab.dart';
+import 'package:clean_cleaner/screens/service_form.dart';
 import 'package:clean_cleaner/screens/services_tab.dart';
 import 'package:clean_cleaner/service_icons.dart';
 import 'package:clean_cleaner/screens/home_screen.dart';
@@ -439,4 +442,83 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   }
+
+  MenuService menu(int id, String name, {String icon = '⌂', String type = 'hourly', int cents = 1700, int? mine, String status = 'approved'}) =>
+      MenuService.fromJson({
+        'id': id,
+        'name': name,
+        'icon': icon,
+        'price_type': type,
+        'price_cents': cents,
+        'duration_minutes': 120,
+        'duration_label': '2–4 hours',
+        'features': '["Oven","Hob"]',
+        'status': status,
+        'created_by_cleaner_id': mine,
+      });
+
+  test('service form: feature lines, prefill and keeping an old icon', () {
+    expect(featureLines(' Oven \n\nHob\n '), ['Oven', 'Hob']);
+    final fresh = ServiceFormController();
+    expect((fresh.icon, fresh.priceType, fresh.name.text), (kDefaultServiceGlyph, 'hourly', ''));
+    final old = ServiceFormController(menu(9, 'Test clean', icon: ':)', type: 'fixed', cents: 2450));
+    expect((old.icon, old.originalIcon, old.priceType, old.price.text), (':)', ':)', 'fixed', '24.50'));
+    expect(old.features.text, 'Oven\nHob');
+    fresh.dispose();
+    old.dispose();
+  });
+
+  for (final (width, scale) in [(375.0, 1.0), (375.0, 1.3), (430.0, 1.0)]) {
+    testWidgets('Add a service at ${width.toInt()}pt, text x$scale', (tester) async {
+      tester.view.physicalSize = Size(width * 3, 932 * 3);
+      tester.view.devicePixelRatio = 3;
+      tester.platformDispatcher.textScaleFactorTestValue = scale;
+      addTearDown(tester.view.reset);
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      await tester.pumpWidget(MaterialApp(
+        theme: SpotlessTheme.light(),
+        home: AddServiceScreen(
+          availableServices: [menu(1, 'Standard home cleaning'), menu(2, 'End-of-tenancy cleaning', icon: '⇄', type: 'fixed', cents: 16000)],
+          currentRates: const [],
+        ),
+      ));
+      await tester.pumpAndSettle();
+      FilledButton bottom() => tester.widget<FilledButton>(find.byType(FilledButton).last);
+      expect(find.text('Select a service to add'), findsOneWidget);
+      expect(bottom().onPressed, isNull);
+
+      await tester.tap(find.text('Standard home cleaning'));
+      await tester.pumpAndSettle();
+      expect(find.text('Add selected (1)'), findsOneWidget);
+      expect(find.text('Your rate (optional)'), findsOneWidget);
+
+      await tester.tap(find.text('Propose new'));
+      await tester.pumpAndSettle();
+      expect(find.text('Send for review'), findsOneWidget);
+      await tester.tap(find.text('Send for review'));
+      await tester.pumpAndSettle();
+      expect(find.text('Enter a service name'), findsOneWidget);
+      final list = find.byType(Scrollable).last;
+      for (var i = 0; i < 6; i++) {
+        await tester.drag(list, const Offset(0, -300));
+        await tester.pumpAndSettle();
+      }
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('Edit service keeps an old icon as "Current" and lays out', (tester) async {
+    tester.view.physicalSize = const Size(375 * 3, 932 * 3);
+    tester.view.devicePixelRatio = 3;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(MaterialApp(
+      theme: SpotlessTheme.light(),
+      home: EditServiceDetailsScreen(service: menu(9, 'Test app clean', icon: ':)', mine: 1, status: 'pending')),
+    ));
+    await tester.pumpAndSettle();
+    expect(find.text('Current'), findsOneWidget);
+    expect(find.textContaining('awaiting admin approval'), findsOneWidget);
+    expect(find.text('Save changes'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }

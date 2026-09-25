@@ -311,3 +311,65 @@ class ToggleChip extends StatelessWidget {
     );
   }
 }
+
+/// Pill segmented control (Existing / Propose new, Week / Month): a soft track
+/// with the selected segment as a white pill. Each segment's touch area covers
+/// the track's 4pt above and below, so it's 46pt tall to tap.
+class SegmentedPills extends StatelessWidget {
+  const SegmentedPills({super.key, required this.labels, required this.selected, required this.onSelected});
+  final List<String> labels;
+  final int selected;
+  final ValueChanged<int> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.tokens;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      decoration: ShapeDecoration(color: s.lineSoft, shape: const StadiumBorder()),
+      child: Row(children: [
+        for (var i = 0; i < labels.length; i++)
+          Expanded(
+            child: Semantics(
+              selected: i == selected,
+              button: true,
+              child: Pressable(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {
+                    if (i == selected) return;
+                    HapticFeedback.selectionClick();
+                    onSelected(i);
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 180),
+                      curve: Curves.easeOut,
+                      height: 38,
+                      alignment: Alignment.center,
+                      decoration: ShapeDecoration(
+                        shape: const StadiumBorder(),
+                        color: i == selected ? Colors.white : Colors.transparent,
+                        shadows: i == selected
+                            ? [BoxShadow(color: context.colors.onSurface.withValues(alpha: .18), blurRadius: 8, spreadRadius: -2, offset: const Offset(0, 2))]
+                            : const [],
+                      ),
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 6),
+                          child: Text(labels[i],
+                              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: i == selected ? null : s.muted)),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ]),
+    );
+  }
+}
