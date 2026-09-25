@@ -9,6 +9,7 @@ import 'package:clean_cleaner/main.dart';
 import 'package:clean_cleaner/screens/add_service_screen.dart';
 import 'package:clean_cleaner/screens/chat_screen.dart';
 import 'package:clean_cleaner/screens/edit_service_details_screen.dart';
+import 'package:clean_cleaner/screens/hours_screen.dart';
 import 'package:clean_cleaner/screens/job_screen.dart';
 import 'package:clean_cleaner/screens/schedule_tab.dart';
 import 'package:clean_cleaner/screens/service_form.dart';
@@ -521,4 +522,69 @@ void main() {
     expect(find.text('Save changes'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  test('groupTimeOff joins consecutive days into ranges', () {
+    TimeOff off(int id, String date) => TimeOff.fromJson({'id': id, 'date': date});
+    final ranges = groupTimeOff([
+      off(3, '2026-10-08'),
+      off(1, '2026-10-06'),
+      off(2, '2026-10-07'),
+      off(4, '2026-10-20'),
+      off(5, '2026-10-31'),
+      off(6, '2026-11-01'), // across a month end
+    ]);
+    expect(ranges.map(timeOffLabel), ['Tue 6 Oct – Thu 8 Oct', 'Tue 20 Oct', 'Sat 31 Oct – Sun 1 Nov']);
+    expect(ranges.first.ids, [1, 2, 3]);
+    expect(groupTimeOff([]), isEmpty);
+  });
+
+  for (final width in [375.0, 430.0]) {
+    testWidgets('Working hours shows a retryable error when loading fails at ${width.toInt()}pt', (tester) async {
+      tester.view.physicalSize = Size(width * 3, 932 * 3);
+      tester.view.devicePixelRatio = 3;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(MaterialApp(theme: SpotlessTheme.light(), home: const HoursScreen()));
+      await tester.pumpAndSettle();
+      expect(find.text('Working hours'), findsOneWidget);
+      expect(find.text("Couldn't load your hours"), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  for (final (width, scale) in [(375.0, 1.0), (375.0, 1.3), (430.0, 1.0)]) {
+    testWidgets('Working hours lays out with hours and time off at ${width.toInt()}pt, text x$scale', (tester) async {
+      tester.view.physicalSize = Size(width * 3, 932 * 3);
+      tester.view.devicePixelRatio = 3;
+      tester.platformDispatcher.textScaleFactorTestValue = scale;
+      addTearDown(tester.view.reset);
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      final soon = DateTime.now().add(const Duration(days: 5));
+      await tester.pumpWidget(MaterialApp(
+        theme: SpotlessTheme.light(),
+        home: HoursScreen(
+          loadHours: () async => [
+            WorkingHours(weekday: 0, startTime: '08:00', endTime: '16:00'),
+            WorkingHours(weekday: 2, startTime: '09:30', endTime: '17:30'),
+          ],
+          loadTimeOff: () async => [
+            TimeOff(id: 1, date: DateUtils.dateOnly(soon)),
+            TimeOff(id: 2, date: DateUtils.dateOnly(soon.add(const Duration(days: 1)))),
+          ],
+        ),
+      ));
+      await tester.pumpAndSettle();
+      expect(find.text('08:00 – 16:00'), findsOneWidget);
+      expect(find.text('Day off'), findsNWidgets(5));
+      await tester.scrollUntilVisible(find.text('2 days off coming up'), 200, scrollable: find.byType(Scrollable).first);
+      expect(find.text('Save working hours'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+
+      // Editing a day opens the From / Until sheet.
+      await tester.scrollUntilVisible(find.text('08:00 – 16:00'), -200, scrollable: find.byType(Scrollable).first);
+      await tester.tap(find.text('08:00 – 16:00'));
+      await tester.pumpAndSettle();
+      expect(find.text('Monday hours'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  }
 }
