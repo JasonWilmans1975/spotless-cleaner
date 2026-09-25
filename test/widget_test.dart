@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:latlong2/latlong.dart';
 
 import 'package:clean_cleaner/api_client.dart';
 import 'package:clean_cleaner/format.dart';
+import 'package:clean_cleaner/geocode.dart';
 import 'package:clean_cleaner/links.dart';
 import 'package:clean_cleaner/main.dart';
 import 'package:clean_cleaner/screens/add_service_screen.dart';
@@ -20,6 +24,7 @@ import 'package:clean_cleaner/screens/services_tab.dart';
 import 'package:clean_cleaner/service_icons.dart';
 import 'package:clean_cleaner/screens/home_screen.dart';
 import 'package:clean_cleaner/theme/spotless_theme.dart';
+import 'package:clean_cleaner/ui/pickers.dart';
 import 'package:clean_cleaner/ui/debug_gallery.dart';
 import 'package:clean_cleaner/ui/tiles.dart';
 
@@ -765,4 +770,109 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   }
+
+  group('Accessibility at 375pt, text x1.3', () {
+    final cleaner = Cleaner.fromJson({
+      'id': 1, 'name': 'Liam Test', 'email': 'liam.test@example.com', 'phone': '07000 000000',
+      'address': '10 Corsica Avenue', 'postcode': 'SW1A 1AA', 'status': 'approved', 'active': 1, 'bio': 'Ten years cleaning.',
+    });
+    final today = DateTime.now();
+    String inDays(int d) => isoDate(today.add(Duration(days: d)));
+    final bookings = [job(1, inDays(1), 'pending'), job(2, inDays(0), 'confirmed'), job(3, inDays(-2), 'completed')];
+    final screens = <String, Widget Function()>{
+      'Schedule': () => ScheduleTab(
+            cleaner: cleaner, bookings: bookings, loading: false, onRefresh: () async {},
+            onCleanerUpdated: (_) {}, onOpenEarnings: () {}, unread: const {2: 1}, sendDecision: (_, _) async {}),
+      'Job details': () => JobScreen(booking: jobWith({})),
+      'Chat': () => ChatScreen(booking: jobWith({})),
+      'Add a service': () => AddServiceScreen(availableServices: [menu(1, 'Standard home cleaning')], currentRates: const []),
+      'Edit service': () => EditServiceDetailsScreen(service: menu(9, 'Oven deep clean', mine: 1)),
+      'Working hours': () => HoursScreen(
+            loadHours: () async => [WorkingHours(weekday: 0, startTime: '08:00', endTime: '16:00')],
+            loadTimeOff: () async => [TimeOff(id: 1, date: DateUtils.dateOnly(today.add(const Duration(days: 3))))]),
+      'Profile': () => ProfileTab(cleaner: cleaner, onCleanerUpdated: (_) {}, onLogout: () async {}, upcomingCount: 1, onOpenEarnings: () {}),
+      'Reviews': () => ReviewsScreen(loadReviews: () async => [review(5, comment: 'Great', tip: 200, tags: ['On time'])]),
+      'Earnings': () => EarningsTab(bookings: bookings, loading: false, onRefresh: () async {}, loadReviews: () async => const []),
+    };
+
+    for (final entry in screens.entries) {
+      testWidgets('${entry.key}: no overflow, 44pt targets, readable contrast', (tester) async {
+        final handle = tester.ensureSemantics();
+        tester.view.physicalSize = const Size(375 * 3, 812 * 3);
+        tester.view.devicePixelRatio = 3;
+        tester.platformDispatcher.textScaleFactorTestValue = 1.3;
+        addTearDown(tester.view.reset);
+        addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+        await tester.pumpWidget(MaterialApp(theme: SpotlessTheme.light(), home: entry.value()));
+        await tester.pump(const Duration(seconds: 1));
+        final scrollable = find.byType(Scrollable).first;
+        for (var i = 0; i < 8; i++) {
+          await tester.drag(scrollable, const Offset(0, -400));
+          await tester.pump(const Duration(milliseconds: 600));
+        }
+        expect(tester.takeException(), isNull);
+        await expectLater(tester, meetsGuideline(iOSTapTargetGuideline));
+        await expectLater(tester, meetsGuideline(textContrastGuideline));
+        handle.dispose();
+        await tester.pumpWidget(const SizedBox()); // stop any timers
+      });
+    }
+  });
+
+  test('parseNominatim reads the first result, or null', () {
+    expect(parseNominatim('[{"lat":"51.5014","lon":"-0.1419"},{"lat":"1","lon":"1"}]'), const LatLng(51.5014, -0.1419));
+    expect(parseNominatim('[]'), isNull);
+    expect(parseNominatim('{"error":"x"}'), isNull);
+    expect(parseNominatim('not json'), isNull);
+  });
+
+  test('geocodeAddress identifies the app, caches hits, never caches failures', () async {
+    final seen = <http.Request>[];
+    var fail = true;
+    final client = MockClient((req) async {
+      seen.add(req);
+      if (fail) return http.Response('busy', 503);
+      return http.Response('[{"lat":"51.5","lon":"-0.14"}]', 200);
+    });
+    const address = '10 Corsica Avenue, SW1A 1AA (geocode test)';
+
+    expect(await geocodeAddress(address, client: client), isNull); // 503 — not cached
+    fail = false;
+    expect(await geocodeAddress(address, client: client), const LatLng(51.5, -0.14));
+    expect(await geocodeAddress(address, client: client), const LatLng(51.5, -0.14)); // from cache
+    expect(seen, hasLength(2));
+    expect(seen.last.headers['User-Agent'], kOsmUserAgent);
+    expect(seen.last.url.host, 'nominatim.openstreetmap.org');
+    expect(seen.last.url.queryParameters['q'], address);
+    expect(await geocodeAddress('  ', client: client), isNull);
+  });
+
+  testWidgets('CountBadge is a circle for one digit and a pill for more', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      theme: SpotlessTheme.light(),
+      home: const Scaffold(
+        body: Stack(children: [
+          // Given the full screen width, like the nav bar's Positioned + Align.
+          Positioned(left: 0, right: 0, top: 0, child: Align(child: CountBadge(3, key: Key('one')))),
+          Positioned(left: 0, right: 0, top: 40, child: Align(child: CountBadge(12, key: Key('two')))),
+        ]),
+      ),
+    ));
+    final one = tester.getSize(find.byKey(const Key('one')));
+    final two = tester.getSize(find.byKey(const Key('two')));
+    expect(one, const Size(18, 18));
+    expect(two.height, 18);
+    expect(two.width, greaterThan(18));
+    expect(two.width, lessThan(40));
+  });
+
+  testWidgets('ToggleChip hugs its label instead of filling the row', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      theme: SpotlessTheme.light(),
+      home: Scaffold(
+        body: Wrap(children: [ToggleChip(key: const Key('chip'), label: 'On time', selected: false, onTap: () {})]),
+      ),
+    ));
+    expect(tester.getSize(find.byKey(const Key('chip'))).width, lessThan(200));
+  });
 }

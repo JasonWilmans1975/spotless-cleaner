@@ -9,6 +9,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../api_client.dart';
 import '../format.dart';
 import '../ui/layout.dart';
+import '../ui/tiles.dart';
 import 'earnings_tab.dart';
 import 'job_screen.dart';
 import 'login_screen.dart';
@@ -271,18 +272,7 @@ class _NavItem extends StatelessWidget {
               right: 0,
               child: Align(
                 alignment: const Alignment(.55, 0),
-                child: Container(
-                  constraints: const BoxConstraints(minWidth: 17),
-                  height: 17,
-                  padding: const EdgeInsets.symmetric(horizontal: 4),
-                  alignment: Alignment.center,
-                  decoration: ShapeDecoration(
-                    color: context.colors.secondary,
-                    shape: const StadiumBorder(side: BorderSide(color: Colors.white, width: 2)),
-                  ),
-                  child: Text(badge > 99 ? '99+' : '$badge',
-                      style: const TextStyle(color: Colors.white, fontSize: 10.5, fontWeight: FontWeight.w700, height: 1)),
-                ),
+                child: CountBadge(badge),
               ),
             ),
         ]),

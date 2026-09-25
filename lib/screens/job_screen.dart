@@ -2,12 +2,15 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_map/flutter_map.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../api_client.dart';
 import '../flags.dart';
 import '../format.dart';
+import '../geocode.dart';
 import '../links.dart';
 import '../theme/spotless_theme.dart';
 import '../ui/layout.dart';
@@ -690,14 +693,28 @@ class _JobScreenState extends State<JobScreen> {
   }
 }
 
-/// Map placeholder (dotted "paper" with a pin) and a Navigate pill.
-class _MapCard extends StatelessWidget {
+/// The job's location on an OpenStreetMap preview (the address is geocoded
+/// with Nominatim), with the postcode label and a Navigate pill that opens the
+/// phone's maps app. Falls back to a dotted placeholder with a pin while
+/// loading or if the address can't be found.
+class _MapCard extends StatefulWidget {
   const _MapCard({required this.address, required this.label});
   final String address, label;
 
   @override
+  State<_MapCard> createState() => _MapCardState();
+}
+
+class _MapCardState extends State<_MapCard> {
+  late final Future<LatLng?> _location = geocodeAddress(widget.address);
+
+  @override
   Widget build(BuildContext context) {
     final s = context.tokens;
+    final pin = Column(mainAxisSize: MainAxisSize.min, children: [
+      IconTile(LucideIcons.mapPin, size: 40, circle: true, background: context.colors.primary, foreground: Colors.white),
+      Container(width: 3, height: 10, color: context.colors.primary),
+    ]);
     return ClipRRect(
       borderRadius: BorderRadius.circular(s.radius),
       child: Container(
@@ -708,29 +725,69 @@ class _MapCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(s.radius),
         ),
         child: Stack(children: [
-          Positioned.fill(child: CustomPaint(painter: _DotsPainter(s.line))),
-          Center(
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              IconTile(LucideIcons.mapPin, size: 40, circle: true, background: context.colors.primary, foreground: Colors.white),
-              Container(width: 3, height: 10, color: context.colors.primary),
-            ]),
+          Positioned.fill(
+            child: FutureBuilder<LatLng?>(
+              future: _location,
+              builder: (context, snap) {
+                final point = snap.data;
+                if (point == null) {
+                  return Stack(children: [
+                    Positioned.fill(child: CustomPaint(painter: _DotsPainter(s.line))),
+                    Center(child: pin),
+                  ]);
+                }
+                return FlutterMap(
+                  options: MapOptions(
+                    initialCenter: point,
+                    initialZoom: 15,
+                    // A still preview — the page scrolls normally over it, and
+                    // Navigate is the way into a real map.
+                    interactionOptions: const InteractionOptions(flags: InteractiveFlag.none),
+                  ),
+                  children: [
+                    TileLayer(
+                      urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                      userAgentPackageName: 'com.example.spotlessCleanerApp',
+                    ),
+                    MarkerLayer(markers: [
+                      Marker(point: point, width: 40, height: 50, alignment: Alignment.topCenter, child: pin),
+                    ]),
+                  ],
+                );
+              },
+            ),
           ),
-          if (label.trim().isNotEmpty)
+          if (widget.label.trim().isNotEmpty)
             Positioned(
               left: 12,
               top: 12,
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: ShapeDecoration(color: Colors.white.withValues(alpha: .85), shape: const StadiumBorder()),
-                child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: s.muted)),
+                child: Text(widget.label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: s.muted)),
               ),
             ),
+          // OpenStreetMap's licence requires this credit wherever its map shows.
+          Positioned(
+            left: 12,
+            bottom: 12,
+            child: FutureBuilder<LatLng?>(
+              future: _location,
+              builder: (context, snap) => snap.data == null
+                  ? const SizedBox.shrink()
+                  : Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: ShapeDecoration(color: Colors.white.withValues(alpha: .85), shape: const StadiumBorder()),
+                      child: Text('© OpenStreetMap contributors', style: TextStyle(fontSize: 10, color: s.muted)),
+                    ),
+            ),
+          ),
           Positioned(
             right: 12,
             bottom: 12,
             child: FilledButton(
               onPressed: () async {
-                if (!await openDirections(address) && context.mounted) {
+                if (!await openDirections(widget.address) && context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Couldn't open maps")));
                 }
               },

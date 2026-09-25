@@ -21,6 +21,35 @@ IconData serviceIcon(String slug) {
   return LucideIcons.sparkles;
 }
 
+/// Unread / pending count: a circle for single digits, a pill for more,
+/// with an optional white ring so it stands out over icons.
+class CountBadge extends StatelessWidget {
+  const CountBadge(this.count, {super.key, this.size = 18, this.ring = true});
+  final int count;
+  final double size;
+  final bool ring;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: size,
+      constraints: BoxConstraints(minWidth: size),
+      padding: EdgeInsets.symmetric(horizontal: count > 9 ? 5 : 0),
+      decoration: ShapeDecoration(
+        color: context.colors.secondary,
+        shape: StadiumBorder(side: ring ? const BorderSide(color: Colors.white, width: 2) : BorderSide.none),
+      ),
+      // widthFactor: 1 hugs the number — a Container with its own alignment
+      // would stretch to fill whatever width it's given.
+      child: Center(
+        widthFactor: 1,
+        child: Text(count > 99 ? '99+' : '$count',
+            style: TextStyle(color: Colors.white, fontSize: size * .58, fontWeight: FontWeight.w700, height: 1)),
+      ),
+    );
+  }
+}
+
 /// The Spotless "S" mark: primary rounded square with the button shadow.
 class BrandMark extends StatelessWidget {
   const BrandMark({super.key, this.size = 42, this.inverted = false});

@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../api_client.dart';
-import '../main.dart';
+import '../ui/layout.dart';
+import '../ui/tiles.dart';
 import 'home_screen.dart';
 import 'register_screen.dart';
 
@@ -62,44 +63,13 @@ class _LoginScreenState extends State<LoginScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Container(
-                    width: 64,
-                    height: 64,
-                    decoration: const BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [kBrandPrimaryLight, kBrandPrimary],
-                      ),
-                    ),
-                    child: const Icon(Icons.cleaning_services, color: Colors.white, size: 28),
-                  ),
+                  const Center(child: BrandMark(size: 64)),
                   const SizedBox(height: 16),
-                  const Text(
-                    'Spotless Cleaner',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 26, fontFamily: kFontHeading, fontWeight: FontWeight.w700, color: kBrandInk),
-                  ),
+                  Text('Spotless Cleaner', textAlign: TextAlign.center, style: context.tokens.heading(26)),
                   const SizedBox(height: 8),
-                  const Text(
-                    'Log in to manage your jobs',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: kBrandMuted),
-                  ),
+                  Text('Log in to manage your jobs', textAlign: TextAlign.center, style: TextStyle(color: context.tokens.muted)),
                   const SizedBox(height: 32),
-                  if (_error != null) ...[
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: kDangerBg,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: kDangerInk.withAlpha(60)),
-                      ),
-                      child: Text(_error!, style: TextStyle(color: kDangerInk)),
-                    ),
-                    const SizedBox(height: 16),
-                  ],
+                  if (_error != null) ...[ErrorBanner(_error!), const SizedBox(height: 16)],
                   TextFormField(
                     controller: _emailController,
                     keyboardType: TextInputType.emailAddress,

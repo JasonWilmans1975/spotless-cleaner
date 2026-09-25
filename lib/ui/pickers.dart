@@ -288,12 +288,13 @@ class ToggleChip extends StatelessWidget {
           curve: Curves.easeOut,
           height: 36,
           padding: const EdgeInsets.symmetric(horizontal: 14),
-          alignment: Alignment.center,
           decoration: ShapeDecoration(
             color: selected ? s.primarySoft : Colors.white,
             shape: StadiumBorder(side: BorderSide(color: selected ? p : s.line)),
           ),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
+          // Hug the label (widthFactor: 1) — an aligned Container would stretch
+          // to the Wrap's full width.
+          child: Center(widthFactor: 1, child: Row(mainAxisSize: MainAxisSize.min, children: [
             if (selected) ...[Icon(LucideIcons.check, size: 14, color: s.primaryDeep), const SizedBox(width: 5)],
             Flexible(
               child: Text(label,
@@ -305,7 +306,7 @@ class ToggleChip extends StatelessWidget {
                     color: selected ? s.primaryDeep : context.text.bodyMedium?.color,
                   )),
             ),
-          ]),
+          ])),
         )),
       )),
     );
