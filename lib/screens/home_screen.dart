@@ -38,6 +38,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _loadingBookings = true;
   List<CleanerBooking>? _bookings;
   Timer? _pollTimer;
+  List<ChatMessage> _messages = const [];
+  StreamSubscription<List<ChatMessage>>? _messagesSub;
 
   @override
   void initState() {
@@ -46,11 +48,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _loadBookings();
     _pollTimer = Timer.periodic(_pollInterval, (_) => _loadBookings());
+    // Customer messages arrive live (Realtime) and feed the unread counts on
+    // job cards; an error just leaves them at zero.
+    _messagesSub = _api.watchMyMessages().listen(
+      (messages) => setState(() => _messages = messages),
+      onError: (Object e) => debugPrint('Messages unavailable: $e'),
+    );
   }
 
   @override
   void dispose() {
     _pollTimer?.cancel();
+    _messagesSub?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -143,9 +152,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 index: _tabIndex,
                 children: [
                   ScheduleTab(
+                    cleaner: _cleaner,
                     bookings: bookings,
                     loading: _loadingBookings && _bookings == null,
                     onRefresh: _loadBookings,
+                    onCleanerUpdated: _onCleanerUpdated,
+                    onOpenEarnings: () => _selectTab(1),
+                    unread: unreadByBooking(_messages),
+                    // TODO(redesign): step 4 — onOpenJob opens Job details.
                   ),
                   // TODO(redesign): step 9 — Earnings (07-earnings).
                   const Center(

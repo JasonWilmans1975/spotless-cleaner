@@ -4,7 +4,9 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:clean_cleaner/api_client.dart';
 import 'package:clean_cleaner/format.dart';
+import 'package:clean_cleaner/links.dart';
 import 'package:clean_cleaner/main.dart';
+import 'package:clean_cleaner/screens/schedule_tab.dart';
 import 'package:clean_cleaner/screens/home_screen.dart';
 import 'package:clean_cleaner/theme/spotless_theme.dart';
 import 'package:clean_cleaner/ui/debug_gallery.dart';
@@ -139,5 +141,133 @@ void main() {
       expect(toMinutes('09:30'), 570);
       expect(durationText(150), '2h 30m');
     });
+  });
+
+  CleanerBooking job(int id, String date, String status,
+          {int price = 4400, String start = '11:00', String end = '13:00', int minutes = 120, String email = 'liam@example.com'}) =>
+      CleanerBooking.fromJson({
+        'id': id,
+        'ref': 'SS-$id',
+        'date': date,
+        'start_time': start,
+        'end_time': end,
+        'status': status,
+        'customer_name': 'Liam Customer',
+        'email': email,
+        'address': '10 Corsica Avenue',
+        'postcode': 'SW1A 1AA',
+        'price_cents': price,
+        'duration_minutes': minutes,
+        'services': {'name': 'Deep cleaning', 'slug': 'deep'},
+      });
+
+  group('schedule logic', () {
+    final now = DateTime(2026, 9, 30, 10); // a Wednesday
+
+    test('weekStart is Monday', () {
+      expect(weekStart(now), DateTime(2026, 9, 28));
+      expect(weekStart(DateTime(2026, 10, 4, 23)), DateTime(2026, 9, 28)); // Sunday
+    });
+
+    test('weekSummary counts confirmed + completed jobs in this week only', () {
+      final summary = weekSummary([
+        job(1, '2026-09-28', 'completed', price: 2400, minutes: 0, start: '09:00', end: '13:00'), // 4h from times
+        job(2, '2026-10-04', 'confirmed', price: 4400, minutes: 120),
+        job(3, '2026-09-30', 'pending'), // not booked yet
+        job(4, '2026-09-29', 'cancelled'),
+        job(5, '2026-10-05', 'confirmed'), // next week
+      ], now);
+      expect(summary, (bookedCents: 6800, jobs: 2, minutes: 360));
+      expect(hoursLabel(360), '6h');
+      expect(hoursLabel(390), '6.5h');
+    });
+
+    test('previousBookingsWith matches the customer and ignores cancellations', () {
+      final request = job(1, '2026-10-01', 'pending');
+      expect(previousBookingsWith(request, [request]), 0);
+      expect(
+        previousBookingsWith(request, [
+          request,
+          job(2, '2026-09-01', 'completed', email: 'LIAM@example.com'),
+          job(3, '2026-09-10', 'cancelled'),
+          job(4, '2026-09-12', 'completed', email: 'someone@else.com'),
+        ]),
+        1,
+      );
+    });
+
+    test('mapsUri picks Apple Maps on iOS, Google Maps elsewhere', () {
+      expect(mapsUri('10 Corsica Ave', platform: TargetPlatform.iOS).toString(), 'https://maps.apple.com/?daddr=10+Corsica+Ave');
+      expect(mapsUri('10 Corsica Ave', platform: TargetPlatform.android).host, 'www.google.com');
+    });
+  });
+
+  Future<List<(int, bool)>> pumpSchedule(WidgetTester tester, double width, {Cleaner? cleaner}) async {
+    tester.view.physicalSize = Size(width * 3, 932 * 3);
+    tester.view.devicePixelRatio = 3;
+    addTearDown(tester.view.reset);
+    final sent = <(int, bool)>[];
+    final today = DateTime.now();
+    String inDays(int d) => isoDate(today.add(Duration(days: d)));
+    await tester.pumpWidget(MaterialApp(
+      theme: SpotlessTheme.light(),
+      home: ScheduleTab(
+        cleaner: cleaner ?? Cleaner.fromJson({'id': 1, 'name': 'Liam Test', 'status': 'approved', 'active': 1}),
+        bookings: [
+          job(1, inDays(1), 'pending'),
+          job(2, inDays(2), 'confirmed'),
+          job(3, inDays(-3), 'completed'),
+        ],
+        loading: false,
+        onRefresh: () async {},
+        onCleanerUpdated: (_) {},
+        onOpenEarnings: () {},
+        unread: const {2: 3},
+        sendDecision: (id, accept) async => sent.add((id, accept)),
+      ),
+    ));
+    await tester.pump(const Duration(seconds: 1));
+    return sent;
+  }
+
+  for (final width in [375.0, 430.0]) {
+    testWidgets('Schedule lays out at ${width.toInt()}pt', (tester) async {
+      await pumpSchedule(tester, width);
+      expect(find.text('Accepting new bookings'), findsOneWidget);
+      expect(find.text('THIS WEEK'), findsOneWidget);
+      expect(find.text('1 awaiting you'), findsOneWidget);
+      expect(find.text('Liam Customer · booked you 2 times before'), findsOneWidget);
+      await tester.scrollUntilVisible(find.text('Directions'), 300, scrollable: find.byType(Scrollable).first);
+      expect(find.text('3'), findsOneWidget); // unread messages on the upcoming job
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('Accept waits out the undo window, then sends once', (tester) async {
+    final sent = await pumpSchedule(tester, 390);
+    await tester.tap(find.text('Accept'));
+    await tester.pump();
+    expect(find.textContaining('Accepted — Deep cleaning'), findsOneWidget);
+    await tester.pump(kUndoWindow - const Duration(seconds: 1));
+    expect(sent, isEmpty);
+    await tester.pump(const Duration(seconds: 2));
+    expect(sent, [(1, true)]);
+  });
+
+  testWidgets('Undo cancels a decline before it is sent', (tester) async {
+    final sent = await pumpSchedule(tester, 390);
+    await tester.tap(find.text('Decline'));
+    await tester.pump();
+    await tester.tap(find.text('Undo'));
+    await tester.pump(kUndoWindow * 2);
+    expect(sent, isEmpty);
+    expect(find.text('Accept'), findsOneWidget); // request card is back
+  });
+
+  testWidgets('availability switch is off and locked while awaiting approval', (tester) async {
+    await pumpSchedule(tester, 390, cleaner: Cleaner.fromJson({'id': 1, 'name': 'Liam', 'status': 'pending', 'active': 0}));
+    expect(find.text('Not bookable yet'), findsOneWidget);
+    final sw = tester.widget<Switch>(find.byType(Switch));
+    expect((sw.value, sw.onChanged), (false, null));
   });
 }
