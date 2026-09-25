@@ -35,3 +35,39 @@ String formatMoney(int cents) {
   final pounds = cents / 100;
   return cents % 100 == 0 ? '£${pounds.toStringAsFixed(0)}' : '£${pounds.toStringAsFixed(2)}';
 }
+
+// ---- Shared with the customer app (spotless-customer/lib/format.dart) ----
+
+const _fullMonthNames = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'
+];
+
+/// e.g. "Tue, 29 Sep" — no year, for cards where the year is obvious.
+String shortDate(DateTime d) => '${_weekdayNames[d.weekday - 1]}, ${d.day} ${_monthNames[d.month - 1]}';
+
+/// e.g. "September 2026".
+String monthYear(DateTime d) => '${_fullMonthNames[d.month - 1]} ${d.year}';
+
+/// e.g. "22 Sep, 14:21".
+String dayMonthTime(DateTime d) =>
+    '${d.day} ${_monthNames[d.month - 1]}, ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+
+/// Whole calendar days from [today] to [day] (0 = today), unaffected by clock changes.
+int daysUntil(DateTime day, DateTime today) => DateTime.utc(day.year, day.month, day.day)
+    .difference(DateTime.utc(today.year, today.month, today.day))
+    .inDays;
+
+/// 'HH:MM' -> minutes since midnight (0 if it doesn't parse).
+int toMinutes(String hhmm) {
+  final parts = hhmm.split(':');
+  if (parts.length < 2) return 0;
+  return (int.tryParse(parts[0]) ?? 0) * 60 + (int.tryParse(parts[1]) ?? 0);
+}
+
+/// Minutes as "1 hour", "3 hours" or "1h 30m".
+String durationText(int minutes) {
+  final h = minutes ~/ 60, m = minutes % 60;
+  if (m != 0) return h == 0 ? '${m}m' : '${h}h ${m}m';
+  return h == 1 ? '1 hour' : '$h hours';
+}

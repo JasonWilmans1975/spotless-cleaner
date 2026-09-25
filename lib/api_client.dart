@@ -1,8 +1,10 @@
 import 'dart:convert';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+import 'format.dart';
 
 /// Supabase project URL and anon key, read from the gitignored `.env` at the
 /// repo root (loaded in main.dart). Copy `.env.example` to `.env` and fill in.
@@ -16,6 +18,10 @@ String get kSupabaseAnonKey => dotenv.env['SUPABASE_ANON_KEY'] ?? '';
 /// Storage bucket holding cleaner profile photos, as `<cleaners.id>.<ext>`.
 /// Created by the migration in spotless-cleaning/supabase/migrations.
 const String kAvatarBucket = 'cleaner-avatars';
+
+/// Private bucket for before/after job photos, as `<booking_id>/<kind>/<name>`
+/// (spotless-supabase migration 20260925090000).
+const String kJobPhotosBucket = 'job-photos';
 
 /// Thrown for any API error — network failure, a rejected query, or a row
 /// that isn't the shape we expect. `message` is safe to show to the user.
@@ -42,6 +48,10 @@ class Cleaner {
   final String? avatar;
   final String status; // 'pending' | 'approved'
   final bool active;
+  final String? bio;
+
+  /// False while the cleaner has paused new bookings (Schedule switch).
+  final bool acceptingBookings;
 
   bool get isPendingApproval => status == 'pending';
 
@@ -62,6 +72,8 @@ class Cleaner {
     required this.avatar,
     required this.status,
     required this.active,
+    this.bio,
+    this.acceptingBookings = true,
   });
 
   factory Cleaner.fromJson(Map<String, dynamic> json) {
@@ -75,6 +87,9 @@ class Cleaner {
       avatar: json['avatar'] as String?,
       status: json['status'] as String? ?? 'pending',
       active: _asBool(json['active']),
+      bio: json['bio'] as String?,
+      // Missing column (migration not applied) reads as "accepting".
+      acceptingBookings: json['accepting_bookings'] == null || _asBool(json['accepting_bookings']),
     );
   }
 }
@@ -223,8 +238,30 @@ class CleanerBooking {
   final String postcode;
   final int priceCents;
   final String? customerComment;
+  final int? serviceId;
+  final String serviceSlug;
+  final List<String> serviceFeatures; // the service's "what's included" (job checklist)
+  final String phone;
+  final String email;
+  final String notes; // the customer's notes for the cleaner (access, pets…)
+  final int durationMinutes;
+  final DateTime? createdAt;
+  final DateTime? confirmedAt;
+  final DateTime? startedAt; // "Start job" (migration 20260925090000)
+  final DateTime? completedAt;
 
   bool get isPast => status == 'completed' || status == 'cancelled';
+
+  /// Confirmed and started, not yet finished.
+  bool get inProgress => status == 'confirmed' && startedAt != null;
+
+  /// Local start time, or null if the row's date/time don't parse.
+  DateTime? get startsAt {
+    final d = DateTime.tryParse(date);
+    if (d == null || !startTime.contains(':')) return null;
+    final m = toMinutes(startTime);
+    return DateTime(d.year, d.month, d.day, m ~/ 60, m % 60);
+  }
 
   CleanerBooking({
     required this.id,
@@ -239,6 +276,17 @@ class CleanerBooking {
     required this.postcode,
     required this.priceCents,
     required this.customerComment,
+    this.serviceId,
+    this.serviceSlug = '',
+    this.serviceFeatures = const [],
+    this.phone = '',
+    this.email = '',
+    this.notes = '',
+    this.durationMinutes = 0,
+    this.createdAt,
+    this.confirmedAt,
+    this.startedAt,
+    this.completedAt,
   });
 
   factory CleanerBooking.fromJson(Map<String, dynamic> json) {
@@ -256,8 +304,155 @@ class CleanerBooking {
       postcode: json['postcode'] as String? ?? '',
       priceCents: (json['price_cents'] as num?)?.toInt() ?? 0,
       customerComment: json['customer_comment'] as String?,
+      serviceId: (json['service_id'] as num?)?.toInt(),
+      serviceSlug: service['slug'] as String? ?? '',
+      serviceFeatures: _features(service['features']),
+      phone: json['phone'] as String? ?? '',
+      email: json['email'] as String? ?? '',
+      notes: json['notes'] as String? ?? '',
+      durationMinutes: (json['duration_minutes'] as num?)?.toInt() ?? 0,
+      createdAt: DateTime.tryParse(json['created_at'] as String? ?? '')?.toLocal(),
+      confirmedAt: DateTime.tryParse(json['confirmed_at'] as String? ?? '')?.toLocal(),
+      startedAt: DateTime.tryParse(json['started_at'] as String? ?? '')?.toLocal(),
+      completedAt: DateTime.tryParse(json['completed_at'] as String? ?? '')?.toLocal(),
     );
   }
+}
+
+/// `services.features` is a JSON-encoded string in Postgres (sometimes already
+/// a list) — decoded leniently, empty on anything unexpected.
+List<String> _features(dynamic raw) {
+  if (raw is List) return raw.map((e) => e.toString()).toList();
+  if (raw is String) {
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is List) return decoded.map((e) => e.toString()).toList();
+    } catch (_) {}
+  }
+  return const [];
+}
+
+/// A day the cleaner has marked as off (`cleaner_time_off`).
+class TimeOff {
+  final int id;
+  final DateTime date;
+  final String? reason;
+
+  TimeOff({required this.id, required this.date, this.reason});
+
+  factory TimeOff.fromJson(Map<String, dynamic> json) => TimeOff(
+        id: (json['id'] as num).toInt(),
+        date: DateTime.parse(json['date'] as String),
+        reason: json['reason'] as String?,
+      );
+}
+
+/// A before/after photo on a job, with a short-lived signed URL to show it.
+class JobPhoto {
+  final int id;
+  final int bookingId;
+  final String kind; // 'before' | 'after'
+  final String path;
+  final String? url;
+
+  JobPhoto({required this.id, required this.bookingId, required this.kind, required this.path, this.url});
+
+  factory JobPhoto.fromJson(Map<String, dynamic> json, {String? url}) => JobPhoto(
+        id: (json['id'] as num).toInt(),
+        bookingId: (json['booking_id'] as num).toInt(),
+        kind: json['kind'] as String? ?? 'before',
+        path: json['path'] as String? ?? '',
+        url: url,
+      );
+}
+
+/// One chat message on a booking (spotless-supabase migration 20260924180000),
+/// seen from the cleaner's side.
+class ChatMessage {
+  final int id;
+  final int bookingId;
+  final bool fromCleaner;
+  final String body;
+  final DateTime createdAt;
+  final DateTime? readAt;
+
+  ChatMessage({
+    required this.id,
+    required this.bookingId,
+    required this.fromCleaner,
+    required this.body,
+    required this.createdAt,
+    this.readAt,
+  });
+
+  factory ChatMessage.fromJson(Map<String, dynamic> json) => ChatMessage(
+        id: (json['id'] as num).toInt(),
+        bookingId: (json['booking_id'] as num).toInt(),
+        fromCleaner: json['sender_role'] == 'cleaner',
+        body: json['body'] as String? ?? '',
+        createdAt: DateTime.tryParse(json['created_at'] as String? ?? '')?.toLocal() ?? DateTime.now(),
+        readAt: DateTime.tryParse(json['read_at'] as String? ?? ''),
+      );
+
+  bool get unreadByCleaner => !fromCleaner && readAt == null;
+}
+
+/// Unread customer messages per booking id.
+Map<int, int> unreadByBooking(List<ChatMessage> messages) {
+  final out = <int, int>{};
+  for (final m in messages) {
+    if (m.unreadByCleaner) out[m.bookingId] = (out[m.bookingId] ?? 0) + 1;
+  }
+  return out;
+}
+
+/// A customer's review of one of this cleaner's jobs (migration 20260924150000).
+class Review {
+  final int bookingId;
+  final int rating;
+  final List<String> tags;
+  final String? comment;
+  final int tipCents;
+  final String reviewerName;
+  final String serviceName;
+  final DateTime? createdAt;
+
+  Review({
+    required this.bookingId,
+    required this.rating,
+    this.tags = const [],
+    this.comment,
+    this.tipCents = 0,
+    required this.reviewerName,
+    this.serviceName = '',
+    this.createdAt,
+  });
+
+  factory Review.fromJson(Map<String, dynamic> json) => Review(
+        bookingId: (json['booking_id'] as num?)?.toInt() ?? 0,
+        rating: (json['rating'] as num?)?.toInt() ?? 0,
+        tags: [for (final t in (json['tags'] as List? ?? const [])) t.toString()],
+        comment: json['comment'] as String?,
+        tipCents: (json['tip_cents'] as num?)?.toInt() ?? 0,
+        reviewerName: json['reviewer_name'] as String? ?? '',
+        serviceName: json['service_name'] as String? ?? '',
+        createdAt: DateTime.tryParse(json['created_at'] as String? ?? '')?.toLocal(),
+      );
+}
+
+/// This cleaner's public numbers from `cleaner_stats()` (migration 20260923170000).
+class CleanerStats {
+  final int completedJobs;
+  final double? avgRating;
+  final int reviewCount;
+
+  CleanerStats({this.completedJobs = 0, this.avgRating, this.reviewCount = 0});
+
+  factory CleanerStats.fromJson(Map<String, dynamic> json) => CleanerStats(
+        completedJobs: (json['completed_jobs'] as num?)?.toInt() ?? 0,
+        avgRating: (json['avg_rating'] as num?)?.toDouble(),
+        reviewCount: (json['review_count'] as num?)?.toInt() ?? 0,
+      );
 }
 
 /// One day of a cleaner's weekly working hours — a weekday (0=Mon..6=Sun) they're
@@ -382,7 +577,7 @@ class ApiClient {
 
   // ---- Profile ----
 
-  Future<Cleaner> updateProfile({String? phone, String? address, String? postcode}) async {
+  Future<Cleaner> updateProfile({String? phone, String? address, String? postcode, String? bio}) async {
     return _guard(() async {
       final id = await _cleanerId();
       final row = await _db
@@ -391,6 +586,7 @@ class ApiClient {
             'phone': ?phone,
             'address': ?address,
             'postcode': ?postcode,
+            'bio': ?bio,
           })
           .eq('id', id)
           .select()
@@ -593,6 +789,166 @@ class ApiClient {
     });
   }
 
+  // ---- Availability pause (migration 20260925090000) ----
+
+  /// Pauses (false) or resumes (true) new bookings for this cleaner.
+  Future<Cleaner> setAcceptingBookings(bool accepting) async {
+    return _guard(() async {
+      final id = await _cleanerId();
+      final row = await _db.from('cleaners').update({'accepting_bookings': accepting}).eq('id', id).select().single();
+      return Cleaner.fromJson(row);
+    });
+  }
+
+  // ---- Time off (migration 20260925090000) ----
+
+  /// This cleaner's days off from today onwards, soonest first.
+  Future<List<TimeOff>> getTimeOff() async {
+    return _guard(() async {
+      final id = await _cleanerId();
+      final rows = await _db
+          .from('cleaner_time_off')
+          .select('id, date, reason')
+          .eq('cleaner_id', id)
+          .gte('date', isoDate(DateTime.now()))
+          .order('date');
+      return rows.map(TimeOff.fromJson).toList();
+    });
+  }
+
+  /// Marks every day from [first] to [last] (inclusive) as off, skipping days
+  /// already off.
+  Future<void> addTimeOff(DateTime first, DateTime last, {String? reason}) async {
+    return _guard(() async {
+      final id = await _cleanerId();
+      final existing = await _db.from('cleaner_time_off').select('date').eq('cleaner_id', id);
+      final taken = {for (final r in existing) r['date'] as String};
+      final rows = [
+        for (var d = DateTime(first.year, first.month, first.day);
+            !d.isAfter(last);
+            d = DateTime(d.year, d.month, d.day + 1))
+          if (!taken.contains(isoDate(d))) {'cleaner_id': id, 'date': isoDate(d), 'reason': ?reason},
+      ];
+      if (rows.isNotEmpty) await _db.from('cleaner_time_off').insert(rows);
+    });
+  }
+
+  Future<void> removeTimeOff(int timeOffId) async {
+    return _guard(() async {
+      final id = await _cleanerId();
+      await _db.from('cleaner_time_off').delete().eq('id', timeOffId).eq('cleaner_id', id);
+    });
+  }
+
+  // ---- Job photos (migration 20260925090000) ----
+
+  /// A job's photos, oldest first, each with a signed URL valid for an hour.
+  Future<List<JobPhoto>> listJobPhotos(int bookingId) async {
+    return _guard(() async {
+      final rows = await _db.from('job_photos').select().eq('booking_id', bookingId).order('created_at');
+      if (rows.isEmpty) return const [];
+      final signed = await _db.storage
+          .from(kJobPhotosBucket)
+          .createSignedUrlsResult([for (final r in rows) r['path'] as String], 3600);
+      // A missing file just shows no image, rather than failing the whole list.
+      final urls = {for (final s in signed.whereType<SignedUrlSuccess>()) s.path: s.signedUrl};
+      return [for (final r in rows) JobPhoto.fromJson(r, url: urls[r['path']])];
+    });
+  }
+
+  /// Uploads a before/after photo ([extension] jpg/jpeg/png/webp/heic).
+  Future<void> uploadJobPhoto(int bookingId, String kind, List<int> bytes, String extension) async {
+    final mimeByExt = {'jpg': 'jpeg', 'jpeg': 'jpeg', 'png': 'png', 'webp': 'webp', 'heic': 'heic'};
+    final mime = mimeByExt[extension.toLowerCase()];
+    if (mime == null) throw ApiException('Please choose a JPG, PNG, WEBP or HEIC photo');
+    return _guard(() async {
+      final path = '$bookingId/$kind/${DateTime.now().millisecondsSinceEpoch}.${extension.toLowerCase()}';
+      await _db.storage.from(kJobPhotosBucket).uploadBinary(
+            path,
+            Uint8List.fromList(bytes),
+            fileOptions: FileOptions(contentType: 'image/$mime'),
+          );
+      await _db.from('job_photos').insert({'booking_id': bookingId, 'kind': kind, 'path': path});
+    });
+  }
+
+  Future<void> deleteJobPhoto(JobPhoto photo) async {
+    return _guard(() async {
+      await _db.from('job_photos').delete().eq('id', photo.id);
+      await _db.storage.from(kJobPhotosBucket).remove([photo.path]);
+    });
+  }
+
+  // ---- Messages (migration 20260924180000) ----
+
+  /// Live list of every message on this cleaner's bookings (RLS limits it),
+  /// newest first — feeds the unread counts on job cards.
+  Stream<List<ChatMessage>> watchMyMessages() => _stream(() => _db
+      .from('messages')
+      .stream(primaryKey: ['id'])
+      .order('created_at')
+      .limit(500)
+      .map((rows) => rows.map(ChatMessage.fromJson).toList()));
+
+  /// Live chat for one booking, oldest first.
+  Stream<List<ChatMessage>> watchChat(int bookingId) => _stream(() => _db
+      .from('messages')
+      .stream(primaryKey: ['id'])
+      .eq('booking_id', bookingId)
+      .order('created_at', ascending: true)
+      .map((rows) => rows.map(ChatMessage.fromJson).toList()));
+
+  /// Streams report failures as an error event with a user-safe message
+  /// instead of throwing while being set up.
+  Stream<T> _stream<T>(Stream<T> Function() open) {
+    try {
+      return open().handleError((Object e) => throw ApiException("Couldn't load messages. Pull down to try again."));
+    } catch (_) {
+      return Stream.error(ApiException("Couldn't load messages. Check your connection."));
+    }
+  }
+
+  Future<void> sendMessage(int bookingId, String body) async {
+    return _guard(() async {
+      await _db.from('messages').insert({'booking_id': bookingId, 'sender_role': 'cleaner', 'body': body});
+    });
+  }
+
+  /// Marks the customer's messages on [bookingId] as read.
+  Future<void> markMessagesRead(int bookingId) async {
+    return _guard(() async {
+      await _db.rpc('mark_messages_read', params: {'p_booking_id': bookingId});
+    });
+  }
+
+  // ---- Reviews & stats ----
+
+  /// Reviews customers have left for this cleaner, newest first.
+  Future<List<Review>> getMyReviews() async {
+    return _guard(() async {
+      final id = await _cleanerId();
+      final rows = await _db
+          .from('reviews')
+          .select('booking_id, rating, tags, comment, tip_cents, reviewer_name, service_name, created_at')
+          .eq('cleaner_id', id)
+          .order('created_at', ascending: false);
+      return rows.map(Review.fromJson).toList();
+    });
+  }
+
+  /// This cleaner's completed-job count and rating, from `cleaner_stats()`.
+  Future<CleanerStats?> getMyStats() async {
+    return _guard(() async {
+      final id = await _cleanerId();
+      final rows = await _db.rpc('cleaner_stats') as List<dynamic>;
+      for (final r in rows) {
+        final row = r as Map<String, dynamic>;
+        if ((row['cleaner_id'] as num?)?.toInt() == id) return CleanerStats.fromJson(row);
+      }
+      return null; // e.g. not active yet
+    });
+  }
+
   // ---- Working hours ----
 
   /// This cleaner's weekly working hours — a weekday missing from the list means
@@ -638,7 +994,7 @@ class ApiClient {
       final id = await _cleanerId();
       final rows = await _db
           .from('bookings')
-          .select('*, services(name)')
+          .select('*, services(name, slug, features)')
           .eq('cleaner_id', id)
           .order('date', ascending: false)
           .order('start_time', ascending: false);
@@ -647,6 +1003,28 @@ class ApiClient {
   }
 
   Future<void> confirmBooking(int bookingId) => _setBookingStatus(bookingId, 'confirmed');
+
+  /// "Finish job": marks the booking completed (completed_at is stamped by the
+  /// bookings_stamp_status trigger).
+  Future<void> finishJob(int bookingId) => _setBookingStatus(bookingId, 'completed');
+
+  /// "Start job": stamps started_at on one of this cleaner's confirmed bookings.
+  Future<DateTime> startJob(int bookingId) async {
+    return _guard(() async {
+      final id = await _cleanerId();
+      final now = DateTime.now();
+      final row = await _db
+          .from('bookings')
+          .update({'started_at': now.toUtc().toIso8601String()})
+          .eq('id', bookingId)
+          .eq('cleaner_id', id)
+          .eq('status', 'confirmed')
+          .select('id')
+          .maybeSingle();
+      if (row == null) throw ApiException('Only a confirmed booking of yours can be started.');
+      return now;
+    });
+  }
 
   Future<void> declineBooking(int bookingId) => _setBookingStatus(bookingId, 'cancelled');
 
