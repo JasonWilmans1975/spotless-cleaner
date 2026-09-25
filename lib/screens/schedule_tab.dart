@@ -1,9 +1,11 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../main.dart';
 
 import '../api_client.dart';
 import '../format.dart';
+import '../ui/debug_gallery.dart';
 
 /// Booking requests (awaiting this cleaner's confirmation), the upcoming
 /// confirmed schedule, and completed jobs — the JSON/mobile equivalent of the
@@ -67,7 +69,16 @@ class _ScheduleTabState extends State<ScheduleTab> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Schedule')),
+      appBar: AppBar(
+        // Long-press opens the widget gallery in debug builds only.
+        // TODO(redesign): step 3 moves this onto the new header.
+        title: GestureDetector(
+          onLongPress: kDebugMode
+              ? () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const DebugGallery()))
+              : null,
+          child: const Text('Schedule'),
+        ),
+      ),
       body: RefreshIndicator(
         onRefresh: widget.onRefresh,
         child: Builder(builder: (context) {

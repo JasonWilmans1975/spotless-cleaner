@@ -388,9 +388,9 @@ class ApiClient {
       final row = await _db
           .from('cleaners')
           .update({
-            if (phone != null) 'phone': phone,
-            if (address != null) 'address': address,
-            if (postcode != null) 'postcode': postcode,
+            'phone': ?phone,
+            'address': ?address,
+            'postcode': ?postcode,
           })
           .eq('id', id)
           .select()
@@ -673,7 +673,7 @@ String _initials(String name) {
   return parts.take(2).map((p) => p[0].toUpperCase()).join();
 }
 
-/// 'Deep Oven Clean' -> 'deep-oven-clean-<suffix>'. The suffix keeps two cleaners
+/// 'Deep Oven Clean' -> `deep-oven-clean-<suffix>`. The suffix keeps two cleaners
 /// proposing the same name from colliding on the unique slug.
 String _slugify(String name) {
   final base = name

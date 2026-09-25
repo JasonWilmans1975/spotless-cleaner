@@ -233,7 +233,7 @@ class _AddServiceScreenState extends State<AddServiceScreen> with SingleTickerPr
             TextFormField(controller: _descCtrl, decoration: const InputDecoration(labelText: "What's included?"), maxLines: 2),
             const SizedBox(height: 12),
             DropdownButtonFormField<String>(
-              value: _priceType,
+              initialValue: _priceType,
               decoration: const InputDecoration(labelText: 'Pricing type'),
               items: const [
                 DropdownMenuItem(value: 'hourly', child: Text('Hourly')),
