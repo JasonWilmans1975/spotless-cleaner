@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../main.dart';
+
 import '../api_client.dart';
 
 /// Pushed from the Services tab to edit the full details — not just the rate —
@@ -103,7 +105,7 @@ class _EditServiceDetailsScreenState extends State<EditServiceDetailsScreen> {
                 isPending
                     ? "This service is still awaiting admin approval — changes here are saved right away and don't restart the review."
                     : "This service is already live. Changes here go into effect immediately.",
-                style: const TextStyle(color: Colors.black54),
+                style: const TextStyle(color: kBrandMuted),
               ),
               const SizedBox(height: 16),
               TextFormField(

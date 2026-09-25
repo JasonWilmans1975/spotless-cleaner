@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../main.dart';
+
 import '../api_client.dart';
 
 const _weekdayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -131,7 +133,7 @@ class _HoursScreenState extends State<HoursScreen> {
                   padding: const EdgeInsets.all(24),
                   children: [
                     const SizedBox(height: 40),
-                    Icon(Icons.wifi_off, size: 40, color: Colors.grey.shade400),
+                    Icon(Icons.wifi_off, size: 40, color: kBrandMuted2),
                     const SizedBox(height: 12),
                     Text(_error!, textAlign: TextAlign.center),
                     const SizedBox(height: 16),
@@ -143,7 +145,7 @@ class _HoursScreenState extends State<HoursScreen> {
                   children: [
                     const Text(
                       "Set the days and hours customers can book you. Turn a day off if you don't work it.",
-                      style: TextStyle(color: Colors.black54, fontSize: 13),
+                      style: TextStyle(color: kBrandMuted, fontSize: 13),
                     ),
                     const SizedBox(height: 16),
                     for (var i = 0; i < 7; i++)

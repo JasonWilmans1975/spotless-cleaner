@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../main.dart';
+
 import '../api_client.dart';
 
 /// Pushed from the Services tab's "+" button — two tabs mirroring the website's
@@ -146,7 +148,7 @@ class _AddServiceScreenState extends State<AddServiceScreen> with SingleTickerPr
           child: Text(
             "You're already offering everything on the menu — try proposing a new one instead.",
             textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.black54),
+            style: TextStyle(color: kBrandMuted),
           ),
         ),
       );
@@ -218,7 +220,7 @@ class _AddServiceScreenState extends State<AddServiceScreen> with SingleTickerPr
           children: [
             const Text(
               "Offer something not already on the menu — an admin reviews it before it goes live. Once approved, you're set up to offer it straight away at the rate you set here.",
-              style: TextStyle(color: Colors.black54),
+              style: TextStyle(color: kBrandMuted),
             ),
             const SizedBox(height: 16),
             TextFormField(

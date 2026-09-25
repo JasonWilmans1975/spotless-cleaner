@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../main.dart';
+
 import '../api_client.dart';
 import '../format.dart';
 
@@ -86,10 +88,10 @@ class _ScheduleTabState extends State<ScheduleTab> {
                     const SizedBox(width: 8),
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                      decoration: BoxDecoration(color: Colors.amber.shade100, borderRadius: BorderRadius.circular(20)),
+                      decoration: BoxDecoration(color: kPendingBg, borderRadius: BorderRadius.circular(20)),
                       child: Text(
                         '${pending.length} awaiting you',
-                        style: TextStyle(fontSize: 11, color: Colors.amber.shade900, fontWeight: FontWeight.w700),
+                        style: TextStyle(fontSize: 11, color: kPendingInk, fontWeight: FontWeight.w700),
                       ),
                     ),
                   ],
@@ -132,7 +134,7 @@ class _EmptyNote extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Text(text, style: TextStyle(color: Colors.grey.shade600)),
+      child: Text(text, style: TextStyle(color: kBrandMuted)),
     );
   }
 }
@@ -151,7 +153,7 @@ class _PendingBookingCard extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 10),
       clipBehavior: Clip.antiAlias,
       child: Container(
-        decoration: BoxDecoration(border: Border(left: BorderSide(color: Colors.amber.shade700, width: 5))),
+        decoration: BoxDecoration(border: Border(left: BorderSide(color: kPendingInk, width: 5))),
         child: Padding(
           padding: const EdgeInsets.all(14),
           child: Column(
@@ -161,10 +163,10 @@ class _PendingBookingCard extends StatelessWidget {
               const SizedBox(height: 6),
               Text(
                 '${friendlyDateString(booking.date)} · ${booking.startTime}–${booking.endTime}',
-                style: TextStyle(color: Colors.grey.shade700, fontSize: 13),
+                style: TextStyle(color: kBrandMuted, fontSize: 13),
               ),
               const SizedBox(height: 2),
-              Text('${booking.address}, ${booking.postcode}', style: TextStyle(color: Colors.grey.shade700, fontSize: 13)),
+              Text('${booking.address}, ${booking.postcode}', style: TextStyle(color: kBrandMuted, fontSize: 13)),
               const SizedBox(height: 6),
               Text(formatMoney(booking.priceCents), style: const TextStyle(fontWeight: FontWeight.w700)),
               const SizedBox(height: 12),
@@ -212,15 +214,15 @@ class _BookingCard extends StatelessWidget {
             const SizedBox(height: 6),
             Text(
               '${friendlyDateString(booking.date)} · ${booking.startTime}–${booking.endTime}',
-              style: TextStyle(color: Colors.grey.shade700, fontSize: 13),
+              style: TextStyle(color: kBrandMuted, fontSize: 13),
             ),
             const SizedBox(height: 2),
-            Text('${booking.address}, ${booking.postcode}', style: TextStyle(color: Colors.grey.shade700, fontSize: 13)),
+            Text('${booking.address}, ${booking.postcode}', style: TextStyle(color: kBrandMuted, fontSize: 13)),
             const SizedBox(height: 6),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(booking.ref, style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
+                Text(booking.ref, style: TextStyle(color: kBrandMuted2, fontSize: 12)),
                 Text(formatMoney(booking.priceCents), style: const TextStyle(fontWeight: FontWeight.w600)),
               ],
             ),
@@ -232,7 +234,7 @@ class _BookingCard extends StatelessWidget {
                     : 'No comment left',
                 style: TextStyle(
                   fontSize: 12.5,
-                  color: Colors.grey.shade600,
+                  color: kBrandMuted,
                   fontStyle: booking.customerComment != null ? FontStyle.italic : FontStyle.normal,
                 ),
               ),

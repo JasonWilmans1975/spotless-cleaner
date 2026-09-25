@@ -192,11 +192,11 @@ class _ProfileTabState extends State<ProfileTab> {
                     children: [
                       CircleAvatar(
                         radius: 44,
-                        backgroundColor: Colors.grey.shade200,
-                        backgroundImage: (cleaner.avatar != null && cleaner.avatar!.isNotEmpty)
-                            ? NetworkImage('$kApiBaseUrl${cleaner.avatar}')
+                        backgroundColor: kBrandLine,
+                        backgroundImage: cleaner.avatarUrl != null
+                            ? NetworkImage(cleaner.avatarUrl!)
                             : null,
-                        child: (cleaner.avatar == null || cleaner.avatar!.isEmpty)
+                        child: cleaner.avatarUrl == null
                             ? Text(
                           cleaner.name.isNotEmpty ? cleaner.name[0].toUpperCase() : '?',
                           style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w700),
@@ -226,12 +226,12 @@ class _ProfileTabState extends State<ProfileTab> {
                   ),
                   const SizedBox(height: 12),
                   Text(cleaner.name, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-                  if (cleaner.email?.isNotEmpty == true) Text(cleaner.email!, style: TextStyle(color: Colors.grey.shade600)),
+                  if (cleaner.email?.isNotEmpty == true) Text(cleaner.email!, style: TextStyle(color: kBrandMuted)),
                   const SizedBox(height: 10),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                     decoration: BoxDecoration(
-                      color: cleaner.isPendingApproval ? Colors.amber.shade100 : Colors.green.shade100,
+                      color: cleaner.isPendingApproval ? kPendingBg : kSuccessBg,
                       borderRadius: BorderRadius.circular(20),
                     ),
                     child: Text(
@@ -239,7 +239,7 @@ class _ProfileTabState extends State<ProfileTab> {
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w700,
-                        color: cleaner.isPendingApproval ? Colors.amber.shade900 : Colors.green.shade900,
+                        color: cleaner.isPendingApproval ? kPendingInk : kSuccessInk,
                       ),
                     ),
                   ),
@@ -303,9 +303,9 @@ class _InfoRow extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
         children: [
-          Icon(icon, size: 16, color: Colors.grey.shade600),
+          Icon(icon, size: 16, color: kBrandMuted),
           const SizedBox(width: 8),
-          Expanded(child: Text(label, style: TextStyle(color: Colors.grey.shade800, fontSize: 13.5))),
+          Expanded(child: Text(label, style: TextStyle(color: kBrandMuted, fontSize: 13.5))),
         ],
       ),
     );

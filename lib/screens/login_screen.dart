@@ -70,7 +70,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       gradient: LinearGradient(
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
-                        colors: [kBrandPrimary, kBrandSecondary],
+                        colors: [kBrandPrimaryLight, kBrandPrimary],
                       ),
                     ),
                     child: const Icon(Icons.cleaning_services, color: Colors.white, size: 28),
@@ -79,24 +79,24 @@ class _LoginScreenState extends State<LoginScreen> {
                   const Text(
                     'Spotless Cleaner',
                     textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800, color: kBrandInk),
+                    style: TextStyle(fontSize: 26, fontFamily: kFontHeading, fontWeight: FontWeight.w700, color: kBrandInk),
                   ),
                   const SizedBox(height: 8),
                   const Text(
                     'Log in to manage your jobs',
                     textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.black54),
+                    style: TextStyle(color: kBrandMuted),
                   ),
                   const SizedBox(height: 32),
                   if (_error != null) ...[
                     Container(
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: Colors.red.shade50,
+                        color: kDangerBg,
                         borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.red.shade200),
+                        border: Border.all(color: kDangerInk.withAlpha(60)),
                       ),
-                      child: Text(_error!, style: TextStyle(color: Colors.red.shade700)),
+                      child: Text(_error!, style: TextStyle(color: kDangerInk)),
                     ),
                     const SizedBox(height: 16),
                   ],

@@ -189,7 +189,7 @@ class _BadgeIcon extends StatelessWidget {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
             constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
-            decoration: const BoxDecoration(color: Colors.redAccent, shape: BoxShape.circle),
+            decoration: const BoxDecoration(color: kDangerInk, shape: BoxShape.circle),
             child: Text(
               count > 9 ? '9+' : '$count',
               textAlign: TextAlign.center,

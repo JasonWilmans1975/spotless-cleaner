@@ -13,12 +13,12 @@ dependencies:
 
   cupertino_icons: ^1.0.8
 
-  # Talks to the Spotless Solutions server's JSON API.
-  http: ^1.2.0
-  # Stores the logged-in cleaner's session token on-device.
-  shared_preferences: ^2.2.0
   # Profile photo — pick from camera or gallery.
   image_picker: ^1.1.2
+  # Reads the gitignored .env at runtime.
+  flutter_dotenv: ^6.0.1
+  # Auth, database and profile-photo storage.
+  supabase_flutter: ^2.17.2
 
 dev_dependencies:
   flutter_test:
@@ -27,3 +27,25 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  assets:
+    - .env
+  fonts:
+    # Same families as the website (public/css/styles.css --font-b / --font-h).
+    - family: PublicSans
+      fonts:
+        - asset: assets/fonts/public-sans-400.ttf
+        - asset: assets/fonts/public-sans-500.ttf
+          weight: 500
+        - asset: assets/fonts/public-sans-600.ttf
+          weight: 600
+        - asset: assets/fonts/public-sans-700.ttf
+          weight: 700
+    - family: SpaceGrotesk
+      fonts:
+        - asset: assets/fonts/space-grotesk-500.ttf
+          weight: 500
+        - asset: assets/fonts/space-grotesk-600.ttf
+          weight: 600
+        - asset: assets/fonts/space-grotesk-700.ttf
+          weight: 700

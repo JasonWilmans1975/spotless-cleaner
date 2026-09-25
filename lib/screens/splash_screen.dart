@@ -49,7 +49,7 @@ class _SplashScreenState extends State<SplashScreen> {
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
-            colors: [kBrandPrimary, kBrandSecondary],
+            colors: [kBrandPrimaryLight, kBrandPrimary],
           ),
         ),
         child: const Center(
@@ -58,7 +58,7 @@ class _SplashScreenState extends State<SplashScreen> {
             children: [
               Text(
                 'Spotless Cleaner',
-                style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w800),
+                style: TextStyle(color: Colors.white, fontSize: 24, fontFamily: kFontHeading, fontWeight: FontWeight.w700),
               ),
               SizedBox(height: 24),
               CircularProgressIndicator(color: Colors.white),

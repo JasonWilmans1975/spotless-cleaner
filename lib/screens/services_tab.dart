@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../main.dart';
+
 import '../api_client.dart';
 import '../format.dart';
 import 'add_service_screen.dart';
@@ -243,7 +245,7 @@ class _ServicesTabState extends State<ServicesTab> with WidgetsBindingObserver {
               padding: const EdgeInsets.all(24),
               children: [
                 const SizedBox(height: 40),
-                Icon(Icons.wifi_off, size: 40, color: Colors.grey.shade400),
+                Icon(Icons.wifi_off, size: 40, color: kBrandMuted2),
                 const SizedBox(height: 12),
                 Text(_error!, textAlign: TextAlign.center),
                 const SizedBox(height: 16),
@@ -263,7 +265,7 @@ class _ServicesTabState extends State<ServicesTab> with WidgetsBindingObserver {
               const SizedBox(height: 4),
               const Text(
                 'Tap a service to edit your rate. Services you proposed also have a ✏️ to edit their full details.',
-                style: TextStyle(fontSize: 12.5, color: Colors.black54),
+                style: TextStyle(fontSize: 12.5, color: kBrandMuted),
               ),
               const SizedBox(height: 10),
               if (myOffered.isEmpty && _pendingProposed.isEmpty)
@@ -271,7 +273,7 @@ class _ServicesTabState extends State<ServicesTab> with WidgetsBindingObserver {
                   padding: EdgeInsets.symmetric(vertical: 8),
                   child: Text(
                     "You're not offering any services yet — tap + above to get started.",
-                    style: TextStyle(color: Colors.black54, fontSize: 13),
+                    style: TextStyle(color: kBrandMuted, fontSize: 13),
                   ),
                 )
               else ...[
@@ -288,12 +290,12 @@ class _ServicesTabState extends State<ServicesTab> with WidgetsBindingObserver {
               const SizedBox(height: 28),
               Text('Rate history', style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 4),
-              const Text('A record of every change to your rates, and who made it.', style: TextStyle(fontSize: 12.5, color: Colors.black54)),
+              const Text('A record of every change to your rates, and who made it.', style: TextStyle(fontSize: 12.5, color: kBrandMuted)),
               const SizedBox(height: 10),
               if (_history.isEmpty)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 8),
-                  child: Text('No rate changes yet.', style: TextStyle(color: Colors.black54, fontSize: 13)),
+                  child: Text('No rate changes yet.', style: TextStyle(color: kBrandMuted, fontSize: 13)),
                 )
               else
                 ..._history.map((h) => _HistoryRow(entry: h)),
@@ -347,7 +349,7 @@ class _MyServiceCard extends StatelessWidget {
                   children: [
                     Text(service.name, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
                     const SizedBox(height: 2),
-                    Text(_fmtRate(service, rate), style: TextStyle(color: Colors.grey.shade700, fontSize: 13)),
+                    Text(_fmtRate(service, rate), style: TextStyle(color: kBrandMuted, fontSize: 13)),
                   ],
                 ),
               ),
@@ -360,7 +362,7 @@ class _MyServiceCard extends StatelessWidget {
               IconButton(
                 onPressed: busy ? null : onRemove,
                 icon: const Icon(Icons.delete_outline),
-                color: Colors.red.shade400,
+                color: kDangerInk,
                 tooltip: 'Remove',
               ),
             ],
@@ -380,7 +382,7 @@ class _PendingServiceCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
-      color: Colors.amber.shade50,
+      color: kPendingBg,
       child: InkWell(
         borderRadius: BorderRadius.circular(20),
         onTap: onEditDetails,
@@ -398,7 +400,7 @@ class _PendingServiceCard extends StatelessWidget {
                     const SizedBox(height: 2),
                     Text(
                       '${formatMoney(service.priceCents)} ${service.isHourly ? "/hour" : "fixed"}',
-                      style: TextStyle(color: Colors.grey.shade700, fontSize: 13),
+                      style: TextStyle(color: kBrandMuted, fontSize: 13),
                     ),
                   ],
                 ),
@@ -406,8 +408,8 @@ class _PendingServiceCard extends StatelessWidget {
               IconButton(onPressed: onEditDetails, icon: const Icon(Icons.edit_outlined), tooltip: 'Edit details'),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(color: Colors.amber.shade200, borderRadius: BorderRadius.circular(20)),
-                child: Text('⏳ Pending', style: TextStyle(fontSize: 11, color: Colors.amber.shade900, fontWeight: FontWeight.w700)),
+                decoration: BoxDecoration(color: kPendingBg, borderRadius: BorderRadius.circular(20)),
+                child: Text('⏳ Pending', style: TextStyle(fontSize: 11, color: kPendingInk, fontWeight: FontWeight.w700)),
               ),
             ],
           ),
@@ -440,14 +442,14 @@ class _HistoryRow extends StatelessWidget {
               Expanded(child: Text(entry.serviceName, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5))),
               Text(
                 entry.changedBy == 'cleaner' ? 'You' : 'Admin',
-                style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                style: TextStyle(fontSize: 12, color: kBrandMuted),
               ),
             ],
           ),
           const SizedBox(height: 2),
           Text('${_fmt(entry.oldPriceCents)} → ${_fmt(entry.newPriceCents)}', style: const TextStyle(fontSize: 13)),
           const SizedBox(height: 2),
-          Text(friendlyDateTimeString(entry.changedAt), style: TextStyle(fontSize: 11.5, color: Colors.grey.shade500)),
+          Text(friendlyDateTimeString(entry.changedAt), style: TextStyle(fontSize: 11.5, color: kBrandMuted2)),
           const Divider(height: 18),
         ],
       ),

@@ -86,7 +86,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         gradient: LinearGradient(
                           begin: Alignment.topLeft,
                           end: Alignment.bottomRight,
-                          colors: [kBrandPrimary, kBrandSecondary],
+                          colors: [kBrandPrimaryLight, kBrandPrimary],
                         ),
                       ),
                       child: const Icon(Icons.cleaning_services, color: Colors.white, size: 20),
@@ -95,7 +95,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     const Expanded(
                       child: Text(
                         "Tell us about you — an admin reviews every application.",
-                        style: TextStyle(color: Colors.black54),
+                        style: TextStyle(color: kBrandMuted),
                       ),
                     ),
                   ],
@@ -105,11 +105,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: Colors.red.shade50,
+                      color: kDangerBg,
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.red.shade200),
+                      border: Border.all(color: kDangerInk.withAlpha(60)),
                     ),
-                    child: Text(_error!, style: TextStyle(color: Colors.red.shade700)),
+                    child: Text(_error!, style: TextStyle(color: kDangerInk)),
                   ),
                   const SizedBox(height: 16),
                 ],
