@@ -1,8 +1,17 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../api_client.dart';
+import '../format.dart';
+import '../service_icons.dart';
+import '../ui/layout.dart';
+import '../ui/pickers.dart';
+import '../ui/tiles.dart';
+import 'service_form.dart';
+import 'services_tab.dart';
 
-/// Pushed from the Services tab's "+" button — two tabs mirroring the website's
+/// Pushed from My services' "+" button — two segments mirroring the website's
 /// "Add a service" modal: opt into an existing menu item at your own rate, or
 /// propose a brand-new one for admin review. Pops `true` if anything changed
 /// (so the caller knows to refetch), or `false`/null if nothing did.
@@ -16,74 +25,41 @@ class AddServiceScreen extends StatefulWidget {
   State<AddServiceScreen> createState() => _AddServiceScreenState();
 }
 
-class _AddServiceScreenState extends State<AddServiceScreen> with SingleTickerProviderStateMixin {
-  late final TabController _tabController;
+class _AddServiceScreenState extends State<AddServiceScreen> {
   final _api = ApiClient();
+  int _tab = 0; // 0 Existing, 1 Propose new
 
-  // "Existing" tab state
-  final Map<int, bool> _checked = {};
-  final Map<int, TextEditingController> _priceControllers = {};
+  // "Existing" state
+  final _checked = <int>{};
+  late final Map<int, TextEditingController> _priceControllers = {
+    for (final s in widget.availableServices) s.id: TextEditingController(),
+  };
   bool _savingExisting = false;
 
-  // "Propose new" tab state
+  // "Propose new" state
   final _formKey = GlobalKey<FormState>();
-  final _nameCtrl = TextEditingController();
-  final _iconCtrl = TextEditingController();
-  final _descCtrl = TextEditingController();
-  final _priceCtrl = TextEditingController();
-  final _durationMinCtrl = TextEditingController();
-  final _durationLabelCtrl = TextEditingController();
-  final _featuresCtrl = TextEditingController();
-  String _priceType = 'hourly';
+  final _form = ServiceFormController();
   bool _submittingNew = false;
 
   @override
-  void initState() {
-    super.initState();
-    _tabController = TabController(length: 2, vsync: this);
-    for (final s in widget.availableServices) {
-      _checked[s.id] = false;
-      _priceControllers[s.id] = TextEditingController();
-    }
-  }
-
-  @override
   void dispose() {
-    _tabController.dispose();
     for (final c in _priceControllers.values) {
       c.dispose();
     }
-    _nameCtrl.dispose();
-    _iconCtrl.dispose();
-    _descCtrl.dispose();
-    _priceCtrl.dispose();
-    _durationMinCtrl.dispose();
-    _durationLabelCtrl.dispose();
-    _featuresCtrl.dispose();
+    _form.dispose();
     super.dispose();
   }
 
-  int? _parsePriceCents(String raw) {
-    final text = raw.trim();
-    if (text.isEmpty) return null;
-    final value = double.tryParse(text);
-    if (value == null) return null;
-    return (value * 100).round();
-  }
-
   Future<void> _saveExisting() async {
-    final newOnes = widget.availableServices
-        .where((s) => _checked[s.id] == true)
-        .map((s) => MyServiceRate(serviceId: s.id, priceCents: _parsePriceCents(_priceControllers[s.id]!.text)))
-        .toList();
-    if (newOnes.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Tick at least one service to add.')));
-      return;
-    }
+    final newOnes = [
+      for (final s in widget.availableServices)
+        if (_checked.contains(s.id)) MyServiceRate(serviceId: s.id, priceCents: parsePriceCents(_priceControllers[s.id]!.text)),
+    ];
+    if (newOnes.isEmpty) return;
+    HapticFeedback.mediumImpact();
     setState(() => _savingExisting = true);
     try {
-      final merged = [...widget.currentRates, ...newOnes];
-      await _api.updateMyServices(merged);
+      await _api.updateMyServices([...widget.currentRates, ...newOnes]);
       if (!mounted) return;
       Navigator.pop(context, true);
     } catch (e) {
@@ -96,22 +72,23 @@ class _AddServiceScreenState extends State<AddServiceScreen> with SingleTickerPr
 
   Future<void> _submitNew() async {
     if (!_formKey.currentState!.validate()) return;
-    final price = double.tryParse(_priceCtrl.text.trim());
+    final price = _form.priceValue;
     if (price == null || price <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please enter a price greater than £0')));
       return;
     }
+    HapticFeedback.mediumImpact();
     setState(() => _submittingNew = true);
     try {
       await _api.proposeService(
-        name: _nameCtrl.text.trim(),
-        icon: _iconCtrl.text.trim().isEmpty ? '✦' : _iconCtrl.text.trim(),
-        description: _descCtrl.text.trim(),
-        priceType: _priceType,
+        name: _form.name.text.trim(),
+        icon: _form.icon,
+        description: _form.description.text.trim(),
+        priceType: _form.priceType,
         price: price,
-        durationMinutes: int.tryParse(_durationMinCtrl.text.trim()),
-        durationLabel: _durationLabelCtrl.text.trim(),
-        features: _featuresCtrl.text.split('\n').map((s) => s.trim()).where((s) => s.isNotEmpty).toList(),
+        durationMinutes: int.tryParse(_form.durationMinutes.text.trim()),
+        durationLabel: _form.durationLabel.text.trim(),
+        features: featureLines(_form.features.text),
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Submitted — awaiting admin approval')));
@@ -126,155 +103,175 @@ class _AddServiceScreenState extends State<AddServiceScreen> with SingleTickerPr
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Add a service'),
-        bottom: TabBar(controller: _tabController, tabs: const [Tab(text: 'Existing'), Tab(text: 'Propose new')]),
-      ),
-      body: TabBarView(
-        controller: _tabController,
-        children: [_buildExistingTab(), _buildProposeTab()],
+    final count = _checked.length;
+    final busy = _tab == 0 ? _savingExisting : _submittingNew;
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle.dark,
+      child: Scaffold(
+        body: SafeArea(
+          bottom: false,
+          child: Column(children: [
+            const ScreenHeader(title: 'Add a service', showBack: true),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: SegmentedPills(
+                labels: const ['Existing', 'Propose new'],
+                selected: _tab,
+                onSelected: (i) {
+                  FocusScope.of(context).unfocus();
+                  setState(() => _tab = i);
+                },
+              ),
+            ),
+            Expanded(child: IndexedStack(index: _tab, children: [_existingTab(), _proposeTab()])),
+          ]),
+        ),
+        bottomNavigationBar: _tab == 0 && widget.availableServices.isEmpty
+            ? null
+            : StickyBottomBar(
+                child: FilledButton(
+                  onPressed: busy || (_tab == 0 && count == 0) ? null : (_tab == 0 ? _saveExisting : _submitNew),
+                  style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(54)),
+                  child: busy
+                      ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : Row(mainAxisSize: MainAxisSize.min, children: [
+                          Icon(_tab == 0 ? LucideIcons.plus : LucideIcons.send, size: 18),
+                          const SizedBox(width: 8),
+                          Flexible(
+                            child: Text(
+                              _tab == 1 ? 'Send for review' : (count == 0 ? 'Select a service to add' : 'Add selected ($count)'),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ]),
+                ),
+              ),
       ),
     );
   }
 
-  Widget _buildExistingTab() {
+  Widget _existingTab() {
+    final s = context.tokens;
     if (widget.availableServices.isEmpty) {
-      return const Center(
-        child: Padding(
-          padding: EdgeInsets.all(24),
-          child: Text(
-            "You're already offering everything on the menu — try proposing a new one instead.",
-            textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.black54),
-          ),
+      return ListView(children: [
+        EmptyState(
+          icon: LucideIcons.circleCheckBig,
+          title: "You're offering everything on the menu",
+          message: 'Have something else in mind? Propose a new service.',
+          actionLabel: 'Propose new',
+          onAction: () => setState(() => _tab = 1),
         ),
-      );
+      ]);
     }
-    return Column(
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 24),
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       children: [
-        Expanded(
-          child: ListView(
-            padding: const EdgeInsets.all(16),
-            children: widget.availableServices.map((s) {
-              final checked = _checked[s.id] ?? false;
-              return Card(
-                margin: const EdgeInsets.only(bottom: 10),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      CheckboxListTile(
-                        value: checked,
-                        onChanged: (v) => setState(() => _checked[s.id] = v ?? false),
-                        controlAffinity: ListTileControlAffinity.leading,
-                        title: Text('${s.icon}  ${s.name}'),
-                      ),
-                      if (checked)
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                          child: TextField(
-                            controller: _priceControllers[s.id],
-                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                            decoration: InputDecoration(
-                              labelText: 'Your rate (optional)',
-                              prefixText: '£ ',
-                              helperText:
-                                  'Leave blank for the default £${(s.priceCents / 100).toStringAsFixed(2)} ${s.isHourly ? "/hour" : "fixed"}',
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              );
-            }).toList(),
+        Text('Pick services already on the menu. You can set your own rate now, or leave it blank to use the default.',
+            style: TextStyle(fontSize: 14, height: 1.5, color: s.muted)),
+        const SizedBox(height: 12),
+        for (var n = 0; n < widget.availableServices.length; n++)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: FadeSlideIn(index: n, child: _existingCard(widget.availableServices[n])),
           ),
-        ),
-        SafeArea(
-          top: false,
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: FilledButton(
-              onPressed: _savingExisting ? null : _saveExisting,
-              child: _savingExisting
-                  ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : const Text('Add selected'),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          decoration: BoxDecoration(color: s.primarySofter, borderRadius: BorderRadius.circular(s.radius)),
+          child: Row(children: [
+            Icon(LucideIcons.lightbulb, size: 18, color: context.colors.primary),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text.rich(
+                TextSpan(children: [
+                  const TextSpan(text: "Can't find it? Switch to "),
+                  TextSpan(text: 'Propose new', style: TextStyle(fontWeight: FontWeight.w700, color: context.colors.primary)),
+                  const TextSpan(text: '.'),
+                ]),
+                style: const TextStyle(fontSize: 13.5),
+              ),
             ),
-          ),
+          ]),
         ),
       ],
     );
   }
 
-  Widget _buildProposeTab() {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
-      child: Form(
-        key: _formKey,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Text(
-              "Offer something not already on the menu — an admin reviews it before it goes live. Once approved, you're set up to offer it straight away at the rate you set here.",
-              style: TextStyle(color: Colors.black54),
-            ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _nameCtrl,
-              decoration: const InputDecoration(labelText: 'Service name'),
-              validator: (v) => (v == null || v.trim().isEmpty) ? 'Enter a service name' : null,
-            ),
-            const SizedBox(height: 12),
-            TextFormField(controller: _iconCtrl, decoration: const InputDecoration(labelText: 'Icon (emoji, optional)'), maxLength: 4),
-            TextFormField(controller: _descCtrl, decoration: const InputDecoration(labelText: "What's included?"), maxLines: 2),
-            const SizedBox(height: 12),
-            DropdownButtonFormField<String>(
-              value: _priceType,
-              decoration: const InputDecoration(labelText: 'Pricing type'),
-              items: const [
-                DropdownMenuItem(value: 'hourly', child: Text('Hourly')),
-                DropdownMenuItem(value: 'fixed', child: Text('Fixed price')),
-              ],
-              onChanged: (v) => setState(() => _priceType = v ?? 'hourly'),
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _priceCtrl,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(labelText: 'Your price (£)'),
-              validator: (v) {
-                final p = double.tryParse((v ?? '').trim());
-                return (p == null || p <= 0) ? 'Enter a price greater than £0' : null;
-              },
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _durationMinCtrl,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: 'Typical duration in minutes (optional)'),
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _durationLabelCtrl,
-              decoration: const InputDecoration(labelText: 'Duration label shown to customers (optional)'),
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _featuresCtrl,
-              decoration: const InputDecoration(labelText: "What's included (one per line, optional)"),
-              maxLines: 3,
-            ),
-            const SizedBox(height: 20),
-            FilledButton(
-              onPressed: _submittingNew ? null : _submitNew,
-              child: _submittingNew
-                  ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : const Text('Submit for approval'),
-            ),
-          ],
+  Widget _existingCard(MenuService sv) {
+    final s = context.tokens;
+    final checked = _checked.contains(sv.id);
+    final detail = [
+      'Default ${formatMoney(sv.priceCents)}${sv.isHourly ? '/hr' : ''}',
+      if (sv.durationLabel.isNotEmpty) sv.durationLabel else if (!sv.isHourly) 'Fixed price',
+    ].join(' · ');
+    return SelectableCard(
+      selected: checked,
+      checkbox: true,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      onTap: () {
+        HapticFeedback.selectionClick();
+        setState(() => checked ? _checked.remove(sv.id) : _checked.add(sv.id));
+      },
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Row(children: [
+          ServiceIconTile(sv.icon, size: 44, background: s.accentSoft, foreground: context.colors.secondary),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(sv.name, style: const TextStyle(fontSize: 15.5, fontWeight: FontWeight.w700)),
+              Text(detail, style: TextStyle(fontSize: 13, color: s.muted)),
+            ]),
+          ),
+        ]),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOut,
+          alignment: Alignment.topCenter,
+          child: checked
+              ? Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: TextField(
+                    controller: _priceControllers[sv.id],
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: InputDecoration(
+                      labelText: 'Your rate (optional)',
+                      prefixText: '£ ',
+                      suffixText: sv.isHourly ? 'per hour' : 'fixed',
+                      helperText: 'Leave blank for the default ${formatMoney(sv.priceCents)}',
+                    ),
+                  ),
+                )
+              : const SizedBox(width: double.infinity),
         ),
+      ]),
+    );
+  }
+
+  Widget _proposeTab() {
+    final s = context.tokens;
+    return Form(
+      key: _formKey,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(20, 18, 20, 24),
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(color: s.primarySofter, borderRadius: BorderRadius.circular(s.radius)),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const IconTile(LucideIcons.shieldCheck, size: 36, circle: true, background: Colors.white),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  "Offer something not already on the menu. An admin reviews it before it goes live — once approved, you're set up to offer it straight away at the price you set here.",
+                  style: TextStyle(fontSize: 13.5, height: 1.45, color: context.colors.onSurface),
+                ),
+              ),
+            ]),
+          ),
+          const SizedBox(height: 18),
+          ServiceDetailsFields(controller: _form),
+        ],
       ),
     );
   }

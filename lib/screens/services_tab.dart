@@ -1,23 +1,36 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../api_client.dart';
 import '../format.dart';
+import '../service_icons.dart';
+import '../theme/spotless_theme.dart';
+import '../ui/layout.dart';
 import 'add_service_screen.dart';
 import 'edit_service_details_screen.dart';
 
-/// "My services" (rate edit / remove), pending self-proposed services, and rate
-/// history — the JSON/mobile equivalent of the corresponding sections on the
-/// website's /cleaner dashboard.
+/// Pence from what the cleaner typed in the rate editor; null (blank or not a
+/// number) means "use the service's default price".
+int? parsePriceCents(String raw) {
+  final text = raw.trim().replaceAll('£', '').trim();
+  if (text.isEmpty) return null;
+  final value = double.tryParse(text);
+  return value == null ? null : (value * 100).round();
+}
+
+/// My services (edit rate / remove), pending self-proposed services, a
+/// suggestion for something to add, and rate history — the mobile equivalent
+/// of the corresponding sections on the website's /cleaner dashboard.
 ///
 /// Fetches its own data independently of the Schedule tab. Services change far
 /// less often than bookings, so this doesn't poll unconditionally — but while a
 /// proposed service is still pending, an admin approving/rejecting it elsewhere
 /// (the website) is exactly the kind of change this screen needs to notice on
-/// its own, same as the website dashboard's own polling for the same thing —
-/// so it polls only while [_pendingProposed] is non-empty, plus a refresh
-/// whenever the app comes back to the foreground.
+/// its own, so it polls only while [_pendingProposed] is non-empty, plus a
+/// refresh whenever the app comes back to the foreground.
 class ServicesTab extends StatefulWidget {
   final int cleanerId;
 
@@ -74,7 +87,7 @@ class _ServicesTabState extends State<ServicesTab> with WidgetsBindingObserver {
 
   /// Lets the cleaner know (via a snackbar) when a proposed service they were
   /// waiting on got reviewed while this screen was open in the background —
-  /// otherwise a quiet poll silently moving a tile out of "Pending" is easy to miss.
+  /// otherwise a quiet poll silently moving a card out of "Pending" is easy to miss.
   void _notifyResolvedServices({required List<MenuService>? previous, required List<MenuService> current}) {
     if (previous == null) return; // first load — nothing to compare against yet
     final previousIds = previous.map((s) => s.id).toSet();
@@ -83,13 +96,15 @@ class _ServicesTabState extends State<ServicesTab> with WidgetsBindingObserver {
     if (resolvedCount == 0) return;
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(resolvedCount == 1 ? 'A proposed service was reviewed — list updated' : '$resolvedCount proposed services were reviewed — list updated'),
+      content: Text(resolvedCount == 1
+          ? 'A proposed service was reviewed — list updated'
+          : '$resolvedCount proposed services were reviewed — list updated'),
     ));
   }
 
-  /// [silent] skips the full-page spinner and swallows errors — used for the
-  /// background poll and app-resume refresh, so a flaky connection doesn't wipe
-  /// out whatever's already on screen.
+  /// [silent] skips the full-page loading state and swallows errors — used for
+  /// the background poll and app-resume refresh, so a flaky connection doesn't
+  /// wipe out whatever's already on screen.
   Future<void> _loadAll({bool silent = false}) async {
     if (!silent) {
       setState(() {
@@ -127,7 +142,7 @@ class _ServicesTabState extends State<ServicesTab> with WidgetsBindingObserver {
     setState(() => _savingRates = true);
     try {
       await _api.updateMyServices(updated);
-      await _loadAll();
+      await _loadAll(silent: true);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(successMessage)));
     } catch (e) {
@@ -139,54 +154,18 @@ class _ServicesTabState extends State<ServicesTab> with WidgetsBindingObserver {
   }
 
   Future<void> _editRate(MenuService service, MyServiceRate current) async {
-    final controller = TextEditingController(
-      text: current.priceCents != null ? (current.priceCents! / 100).toStringAsFixed(2) : '',
-    );
-    final save = await showDialog<bool>(
+    final text = await showModalBottomSheet<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Your rate for ${service.name}'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          decoration: InputDecoration(
-            labelText: 'Rate (£)',
-            prefixText: '£ ',
-            helperText: 'Leave blank to use the default £${(service.priceCents / 100).toStringAsFixed(2)} ${service.isHourly ? "/hour" : "fixed"}',
-          ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Save')),
-        ],
-      ),
+      isScrollControlled: true,
+      builder: (_) => _RateSheet(service: service, current: current),
     );
-    // Deliberately not disposing `controller` here: it's a one-off local
-    // TextEditingController with no State object of its own, and the dialog's
-    // AlertDialog/TextField can still be mid-exit-animation for a moment after
-    // showDialog's Future resolves (Navigator.pop returns before the transition
-    // finishes). Disposing it at this exact point raced that animation and
-    // crashed with "a disposed ChangeNotifier was used" whenever a rebuild (e.g.
-    // this screen's background poll) landed in that window. Skipping dispose is
-    // safe here — nothing keeps a reference to it once this function returns, so
-    // it's simply garbage collected instead.
-    final text = controller.text.trim();
-    if (save != true) return;
-    final priceCents = _parsePriceCents(text);
+    if (text == null) return; // dismissed
     final updated = [
       for (final r in _myRates)
         if (r.serviceId != service.id) r,
-      MyServiceRate(serviceId: service.id, priceCents: priceCents),
+      MyServiceRate(serviceId: service.id, priceCents: parsePriceCents(text)),
     ];
     await _saveRates(updated, successMessage: 'Rate saved');
-  }
-
-  int? _parsePriceCents(String raw) {
-    final text = raw.trim();
-    if (text.isEmpty) return null;
-    final value = double.tryParse(text);
-    return value == null ? null : (value * 100).round();
   }
 
   Future<void> _removeService(MenuService service) async {
@@ -197,11 +176,16 @@ class _ServicesTabState extends State<ServicesTab> with WidgetsBindingObserver {
         content: Text("You'll stop being offered for ${service.name}."),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Remove')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: context.tokens.red),
+            child: const Text('Remove'),
+          ),
         ],
       ),
     );
     if (sure != true) return;
+    HapticFeedback.mediumImpact();
     final updated = _myRates.where((r) => r.serviceId != service.id).toList();
     await _saveRates(updated, successMessage: 'Removed');
   }
@@ -227,146 +211,202 @@ class _ServicesTabState extends State<ServicesTab> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Services'),
-        actions: [
-          IconButton(onPressed: _loading ? null : _openAddService, icon: const Icon(Icons.add), tooltip: 'Add service'),
-        ],
-      ),
-      body: RefreshIndicator(
-        onRefresh: _loadAll,
-        child: Builder(builder: (context) {
-          if (_loading) return const Center(child: CircularProgressIndicator());
-          if (_error != null) {
-            return ListView(
-              padding: const EdgeInsets.all(24),
-              children: [
-                const SizedBox(height: 40),
-                Icon(Icons.wifi_off, size: 40, color: Colors.grey.shade400),
-                const SizedBox(height: 12),
-                Text(_error!, textAlign: TextAlign.center),
-                const SizedBox(height: 16),
-                FilledButton(onPressed: _loadAll, child: const Text('Try again')),
-              ],
-            );
-          }
-
-          final myServiceIds = _myRates.map((r) => r.serviceId).toSet();
-          final myOffered = _allServices.where((s) => myServiceIds.contains(s.id)).toList();
-          final rateByServiceId = {for (final r in _myRates) r.serviceId: r};
-
-          return ListView(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-            children: [
-              Text('My services', style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 4),
-              const Text(
-                'Tap a service to edit your rate. Services you proposed also have a ✏️ to edit their full details.',
-                style: TextStyle(fontSize: 12.5, color: Colors.black54),
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle.dark,
+      child: Scaffold(
+        body: Column(children: [
+          ScreenHeader(
+            title: 'My services',
+            subtitle: 'Tap edit to change your rate',
+            trailing: [
+              IconButton(
+                tooltip: 'Add a service',
+                onPressed: _loading ? null : _openAddService,
+                style: IconButton.styleFrom(
+                  backgroundColor: context.colors.primary,
+                  foregroundColor: Colors.white,
+                  side: BorderSide.none,
+                  shadowColor: context.colors.primary,
+                  elevation: 0,
+                ),
+                icon: const Icon(LucideIcons.plus, size: 20),
               ),
-              const SizedBox(height: 10),
-              if (myOffered.isEmpty && _pendingProposed.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 8),
-                  child: Text(
-                    "You're not offering any services yet — tap + above to get started.",
-                    style: TextStyle(color: Colors.black54, fontSize: 13),
-                  ),
-                )
-              else ...[
-                ...myOffered.map((s) => _MyServiceCard(
-                  service: s,
-                  rate: rateByServiceId[s.id]!,
-                  busy: _savingRates,
-                  onTap: () => _editRate(s, rateByServiceId[s.id]!),
-                  onRemove: () => _removeService(s),
-                  onEditDetails: s.createdByCleanerId == widget.cleanerId ? () => _editDetails(s) : null,
-                )),
-                ..._pendingProposed.map((s) => _PendingServiceCard(service: s, onEditDetails: () => _editDetails(s))),
-              ],
-              const SizedBox(height: 28),
-              Text('Rate history', style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 4),
-              const Text('A record of every change to your rates, and who made it.', style: TextStyle(fontSize: 12.5, color: Colors.black54)),
-              const SizedBox(height: 10),
-              if (_history.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 8),
-                  child: Text('No rate changes yet.', style: TextStyle(color: Colors.black54, fontSize: 13)),
-                )
-              else
-                ..._history.map((h) => _HistoryRow(entry: h)),
             ],
-          );
-        }),
+          ),
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: _loadAll,
+              child: Builder(builder: (context) {
+                if (_loading) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (_error != null) {
+                  return ListView(children: [
+                    EmptyState(
+                      icon: LucideIcons.wifiOff,
+                      title: "Couldn't load your services",
+                      message: _error,
+                      actionLabel: 'Try again',
+                      onAction: _loadAll,
+                    ),
+                  ]);
+                }
+                return _buildList();
+              }),
+            ),
+          ),
+        ]),
       ),
+    );
+  }
+
+  Widget _buildList() {
+    final myServiceIds = _myRates.map((r) => r.serviceId).toSet();
+    final myOffered = _allServices.where((sv) => myServiceIds.contains(sv.id)).toList();
+    final rateByServiceId = {for (final r in _myRates) r.serviceId: r};
+    final suggestion = _allServices.where((sv) => !myServiceIds.contains(sv.id)).firstOrNull;
+
+    var i = 0;
+    Widget section(Widget child) => Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 14),
+          child: FadeSlideIn(index: i++, child: child),
+        );
+
+    return ListView(
+      padding: const EdgeInsets.only(top: 4, bottom: 16),
+      children: [
+        if (myOffered.isEmpty && _pendingProposed.isEmpty)
+          EmptyState(
+            icon: LucideIcons.sparkles,
+            title: "You're not offering any services yet",
+            message: 'Add the cleans you do and set your own rates.',
+            actionLabel: 'Add a service',
+            onAction: _openAddService,
+          )
+        else ...[
+          for (final sv in myOffered)
+            section(MyServiceCard(
+              service: sv,
+              rate: rateByServiceId[sv.id]!,
+              busy: _savingRates,
+              onEditRate: () => _editRate(sv, rateByServiceId[sv.id]!),
+              onRemove: () => _removeService(sv),
+              onEditDetails: sv.createdByCleanerId == widget.cleanerId ? () => _editDetails(sv) : null,
+            )),
+          for (final sv in _pendingProposed) section(_PendingServiceCard(service: sv, onEditDetails: () => _editDetails(sv))),
+        ],
+        if (suggestion != null) section(_SuggestionCard(service: suggestion, onTap: _openAddService)),
+        section(const SectionHeader('Rate history')),
+        section(_history.isEmpty
+            ? Text('No rate changes yet — every change to your rates, and who made it, shows up here.',
+                style: TextStyle(fontSize: 13.5, color: context.tokens.muted))
+            : SpotlessCard(
+                child: Column(children: [
+                  for (var n = 0; n < _history.length; n++) _HistoryRow(entry: _history[n], isLast: n == _history.length - 1),
+                ]),
+              )),
+      ],
     );
   }
 }
 
-String _fmtRate(MenuService service, MyServiceRate rate) {
-  final unit = service.isHourly ? '/hour' : 'fixed';
-  if (rate.priceCents == null) return 'Default ${formatMoney(service.priceCents)} $unit';
-  return '${formatMoney(rate.priceCents!)} $unit';
-}
+String _unit(bool hourly) => hourly ? 'per hour' : 'fixed';
 
-class _MyServiceCard extends StatelessWidget {
+/// One offered service: icon, name, rate and its Edit rate / Edit details / Remove actions.
+class MyServiceCard extends StatelessWidget {
   final MenuService service;
   final MyServiceRate rate;
   final bool busy;
-  final VoidCallback onTap;
+  final VoidCallback onEditRate;
   final VoidCallback onRemove;
   final VoidCallback? onEditDetails; // non-null only for services this cleaner proposed themselves
 
-  const _MyServiceCard({
+  const MyServiceCard({
+    super.key,
     required this.service,
     required this.rate,
     required this.busy,
-    required this.onTap,
+    required this.onEditRate,
     required this.onRemove,
     required this.onEditDetails,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 10),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(20),
-        onTap: busy ? null : onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Row(
-            children: [
-              Text(service.icon, style: const TextStyle(fontSize: 22)),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(service.name, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
-                    const SizedBox(height: 2),
-                    Text(_fmtRate(service, rate), style: TextStyle(color: Colors.grey.shade700, fontSize: 13)),
-                  ],
-                ),
-              ),
-              if (onEditDetails != null)
-                IconButton(
-                  onPressed: busy ? null : onEditDetails,
-                  icon: const Icon(Icons.edit_outlined),
-                  tooltip: 'Edit details',
-                ),
-              IconButton(
-                onPressed: busy ? null : onRemove,
-                icon: const Icon(Icons.delete_outline),
-                color: Colors.red.shade400,
-                tooltip: 'Remove',
-              ),
-            ],
+    final s = context.tokens;
+    final own = onEditDetails != null;
+    final custom = rate.priceCents != null;
+    final soft = FilledButton.styleFrom(
+      backgroundColor: s.primarySofter,
+      foregroundColor: context.colors.primary,
+      minimumSize: const Size(0, 44),
+      textStyle: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
+    );
+    return SpotlessCard(
+      padding: const EdgeInsets.all(16),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          ServiceIconTile(service.icon, background: own ? s.accentSoft : s.primarySoft, foreground: own ? s.accentDeep : null),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Wrap(spacing: 8, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                Text(service.name, style: s.heading(16.5)),
+                if (own) SpotlessPill('Proposed by you', colors: (s.accentSoft, s.accentDeep), icon: LucideIcons.sparkles),
+              ]),
+              const SizedBox(height: 2),
+              Text(custom ? 'Default ${formatMoney(service.priceCents)}' : 'Using default rate',
+                  style: TextStyle(fontSize: 12.5, color: s.muted)),
+            ]),
           ),
-        ),
-      ),
+          const SizedBox(width: 8),
+          Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 200),
+              child: Text(formatMoney(rate.priceCents ?? service.priceCents),
+                  key: ValueKey(rate.priceCents), style: s.heading(22).copyWith(height: 1)),
+            ),
+            Text(_unit(service.isHourly), style: TextStyle(fontSize: 12, color: s.muted)),
+          ]),
+        ]),
+        const SizedBox(height: 14),
+        const Divider(),
+        const SizedBox(height: 12),
+        Row(children: [
+          Expanded(
+            child: FilledButton(
+              onPressed: busy ? null : onEditRate,
+              style: soft,
+              child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(LucideIcons.pencil, size: 15),
+                SizedBox(width: 6),
+                Flexible(child: Text('Edit rate', overflow: TextOverflow.ellipsis)),
+              ]),
+            ),
+          ),
+          if (own) ...[
+            const SizedBox(width: 8),
+            Expanded(
+              child: FilledButton(
+                onPressed: busy ? null : onEditDetails,
+                style: soft,
+                child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(LucideIcons.filePen, size: 15),
+                  SizedBox(width: 6),
+                  Flexible(child: Text('Edit details', overflow: TextOverflow.ellipsis)),
+                ]),
+              ),
+            ),
+          ],
+          const SizedBox(width: 8),
+          IconButton(
+            tooltip: 'Remove ${service.name}',
+            onPressed: busy ? null : onRemove,
+            style: IconButton.styleFrom(backgroundColor: s.redSoft, foregroundColor: s.red, side: BorderSide.none),
+            icon: const Icon(LucideIcons.trash2, size: 17),
+          ),
+        ]),
+      ]),
     );
   }
 }
@@ -378,39 +418,73 @@ class _PendingServiceCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 10),
-      color: Colors.amber.shade50,
+    final s = context.tokens;
+    return SpotlessCard(
+      padding: const EdgeInsets.all(16),
+      onTap: onEditDetails,
+      child: Row(children: [
+        ServiceIconTile(service.icon, background: s.goldSoft, foreground: s.gold),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(service.name, style: s.heading(16.5)),
+            const SizedBox(height: 4),
+            Wrap(spacing: 8, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
+              SpotlessPill('Pending review', colors: s.awaiting, icon: LucideIcons.hourglass),
+              Text('${formatMoney(service.priceCents)} ${_unit(service.isHourly)}', style: TextStyle(fontSize: 12.5, color: s.muted)),
+            ]),
+          ]),
+        ),
+        IconButton(
+          tooltip: 'Edit details',
+          onPressed: onEditDetails,
+          style: IconButton.styleFrom(backgroundColor: Colors.transparent, side: BorderSide.none),
+          icon: Icon(LucideIcons.filePen, size: 18, color: context.colors.primary),
+        ),
+      ]),
+    );
+  }
+}
+
+/// Hero-style nudge to offer a service the cleaner doesn't yet.
+class _SuggestionCard extends StatelessWidget {
+  const _SuggestionCard({required this.service, required this.onTap});
+  final MenuService service;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.tokens;
+    return Material(
+      color: s.heroBg,
+      borderRadius: BorderRadius.circular(s.radius),
       child: InkWell(
-        borderRadius: BorderRadius.circular(20),
-        onTap: onEditDetails,
+        borderRadius: BorderRadius.circular(s.radius),
+        onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Row(
-            children: [
-              Text(service.icon, style: const TextStyle(fontSize: 22)),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(service.name, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
-                    const SizedBox(height: 2),
-                    Text(
-                      '${formatMoney(service.priceCents)} ${service.isHourly ? "/hour" : "fixed"}',
-                      style: TextStyle(color: Colors.grey.shade700, fontSize: 13),
-                    ),
-                  ],
+          padding: const EdgeInsets.all(16),
+          child: Row(children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(color: s.heroChip, shape: BoxShape.circle),
+              alignment: Alignment.center,
+              child: Icon(iconForGlyph(service.icon) ?? LucideIcons.plus, size: 20, color: s.heroAccent),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('Offer ${service.name}', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: s.heroInk)),
+                Text(
+                  service.isHourly
+                      ? 'From ${formatMoney(service.priceCents)} per hour — more ways to get booked.'
+                      : '${formatMoney(service.priceCents)} fixed — more ways to get booked.',
+                  style: TextStyle(fontSize: 13, color: s.heroMuted),
                 ),
-              ),
-              IconButton(onPressed: onEditDetails, icon: const Icon(Icons.edit_outlined), tooltip: 'Edit details'),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(color: Colors.amber.shade200, borderRadius: BorderRadius.circular(20)),
-                child: Text('⏳ Pending', style: TextStyle(fontSize: 11, color: Colors.amber.shade900, fontWeight: FontWeight.w700)),
-              ),
-            ],
-          ),
+              ]),
+            ),
+            Icon(LucideIcons.arrowRight, color: s.heroAccent),
+          ]),
         ),
       ),
     );
@@ -419,37 +493,109 @@ class _PendingServiceCard extends StatelessWidget {
 
 class _HistoryRow extends StatelessWidget {
   final PriceHistoryEntry entry;
-  const _HistoryRow({required this.entry});
+  final bool isLast;
+  const _HistoryRow({required this.entry, required this.isLast});
 
   String _fmt(int? cents) {
-    if (cents == null) return 'Default (${formatMoney(entry.defaultPriceCents)})';
     final unit = entry.priceType == 'hourly' ? '/hour' : 'fixed';
+    if (cents == null) return 'Default ${formatMoney(entry.defaultPriceCents)} $unit';
     return '${formatMoney(cents)} $unit';
   }
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Expanded(child: Text(entry.serviceName, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5))),
-              Text(
-                entry.changedBy == 'cleaner' ? 'You' : 'Admin',
-                style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-              ),
-            ],
+    final s = context.tokens;
+    final p = context.colors.primary;
+    return IntrinsicHeight(
+      child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Column(children: [
+            Container(
+              width: 10,
+              height: 10,
+              decoration: BoxDecoration(color: p, shape: BoxShape.circle, boxShadow: [BoxShadow(color: s.primarySoft, spreadRadius: 4)]),
+            ),
+            if (!isLast) Expanded(child: Container(width: 2, margin: const EdgeInsets.only(top: 4), color: s.line)),
+          ]),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Padding(
+            padding: EdgeInsets.only(bottom: isLast ? 0 : 16),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Expanded(child: Text(entry.serviceName, style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700))),
+                Text(entry.changedBy == 'cleaner' ? 'by you' : 'by admin', style: TextStyle(fontSize: 12, color: s.muted)),
+              ]),
+              const SizedBox(height: 2),
+              Text.rich(TextSpan(children: [
+                TextSpan(
+                  text: _fmt(entry.oldPriceCents),
+                  style: TextStyle(color: s.muted, decoration: TextDecoration.lineThrough),
+                ),
+                TextSpan(text: '  →  ', style: TextStyle(color: s.muted)),
+                TextSpan(text: _fmt(entry.newPriceCents), style: const TextStyle(fontWeight: FontWeight.w700)),
+              ]), style: const TextStyle(fontSize: 14)),
+              const SizedBox(height: 2),
+              Text(friendlyDateTimeString(entry.changedAt), style: TextStyle(fontSize: 12, color: s.muted)),
+            ]),
           ),
-          const SizedBox(height: 2),
-          Text('${_fmt(entry.oldPriceCents)} → ${_fmt(entry.newPriceCents)}', style: const TextStyle(fontSize: 13)),
-          const SizedBox(height: 2),
-          Text(friendlyDateTimeString(entry.changedAt), style: TextStyle(fontSize: 11.5, color: Colors.grey.shade500)),
-          const Divider(height: 18),
-        ],
+        ),
+      ]),
+    );
+  }
+}
+
+/// Bottom sheet for one rate. Pops with the typed text ('' = use the default),
+/// or null if dismissed.
+class _RateSheet extends StatefulWidget {
+  const _RateSheet({required this.service, required this.current});
+  final MenuService service;
+  final MyServiceRate current;
+
+  @override
+  State<_RateSheet> createState() => _RateSheetState();
+}
+
+class _RateSheetState extends State<_RateSheet> {
+  late final _controller = TextEditingController(
+    text: widget.current.priceCents != null ? (widget.current.priceCents! / 100).toStringAsFixed(2) : '',
+  );
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.tokens;
+    final sv = widget.service;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(20, 0, 20, 20 + MediaQuery.viewInsetsOf(context).bottom),
+      child: SafeArea(
+        top: false,
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Text('Your rate for ${sv.name}', style: s.heading(20)),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _controller,
+            autofocus: true,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            textInputAction: TextInputAction.done,
+            onSubmitted: (_) => Navigator.pop(context, _controller.text),
+            decoration: InputDecoration(
+              labelText: 'Rate',
+              prefixText: '£ ',
+              suffixText: sv.isHourly ? 'per hour' : 'fixed',
+              helperText: 'Leave blank to use the default ${formatMoney(sv.priceCents)} ${_unit(sv.isHourly)}',
+            ),
+          ),
+          const SizedBox(height: 16),
+          FilledButton(onPressed: () => Navigator.pop(context, _controller.text), child: const Text('Save rate')),
+        ]),
       ),
     );
   }

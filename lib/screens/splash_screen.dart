@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../api_client.dart';
-import '../main.dart';
+import '../ui/layout.dart';
+import '../ui/tiles.dart';
 import 'home_screen.dart';
 import 'login_screen.dart';
 
@@ -36,7 +37,7 @@ class _SplashScreenState extends State<SplashScreen> {
     if (!mounted) return;
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
-        builder: (_) => cleaner != null ? HomeScreen(cleaner: cleaner!) : const LoginScreen(),
+        builder: (_) => cleaner != null ? HomeScreen(cleaner: cleaner) : const LoginScreen(),
       ),
     );
   }
@@ -44,27 +45,15 @@ class _SplashScreenState extends State<SplashScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [kBrandPrimary, kBrandSecondary],
-          ),
-        ),
-        child: const Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                'Spotless Cleaner',
-                style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w800),
-              ),
-              SizedBox(height: 24),
-              CircularProgressIndicator(color: Colors.white),
-            ],
-          ),
-        ),
+      backgroundColor: context.colors.primary,
+      body: Center(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const BrandMark(size: 64, inverted: true),
+          const SizedBox(height: 16),
+          Text('Spotless Cleaner', style: context.tokens.heading(24, color: Colors.white)),
+          const SizedBox(height: 24),
+          const CircularProgressIndicator(color: Colors.white),
+        ]),
       ),
     );
   }

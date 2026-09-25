@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../api_client.dart';
-import '../main.dart';
+import '../ui/layout.dart';
+import '../ui/tiles.dart';
 import 'home_screen.dart';
 
 /// "Apply as a cleaner" — same fields and rules as the website's /cleaner/register
@@ -76,43 +77,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Row(
-                  children: [
-                    Container(
-                      width: 44,
-                      height: 44,
-                      decoration: const BoxDecoration(
-                        shape: BoxShape.circle,
-                        gradient: LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [kBrandPrimary, kBrandSecondary],
-                        ),
-                      ),
-                      child: const Icon(Icons.cleaning_services, color: Colors.white, size: 20),
-                    ),
-                    const SizedBox(width: 12),
-                    const Expanded(
-                      child: Text(
-                        "Tell us about you — an admin reviews every application.",
-                        style: TextStyle(color: Colors.black54),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 24),
-                if (_error != null) ...[
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.red.shade50,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.red.shade200),
-                    ),
-                    child: Text(_error!, style: TextStyle(color: Colors.red.shade700)),
+                Row(children: [
+                  const BrandMark(size: 44),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text("Tell us about you — an admin reviews every application.",
+                        style: TextStyle(color: context.tokens.muted)),
                   ),
-                  const SizedBox(height: 16),
-                ],
+                ]),
+                const SizedBox(height: 24),
+                if (_error != null) ...[ErrorBanner(_error!), const SizedBox(height: 16)],
                 TextFormField(
                   controller: _nameController,
                   decoration: const InputDecoration(labelText: 'Full name'),

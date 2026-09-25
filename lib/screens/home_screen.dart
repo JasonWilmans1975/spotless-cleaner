@@ -1,16 +1,24 @@
 import 'dart:async';
 
+import 'dart:math';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../api_client.dart';
-import '../main.dart';
+import '../format.dart';
+import '../ui/layout.dart';
+import '../ui/tiles.dart';
+import 'earnings_tab.dart';
+import 'job_screen.dart';
 import 'login_screen.dart';
 import 'profile_tab.dart';
 import 'schedule_tab.dart';
 import 'services_tab.dart';
 
-/// The app shell once logged in: a bottom-nav'd Schedule / Services / Profile,
-/// plus a pending-approval banner (shown on every tab) if the admin hasn't
+/// The app shell once logged in: a bottom-nav'd Schedule / Earnings / Services /
+/// Profile, plus a pending-approval banner (shown on every tab) if the admin hasn't
 /// approved this cleaner yet.
 ///
 /// Bookings are fetched once here (not per-tab) so the Schedule tab's bottom-nav
@@ -34,6 +42,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _loadingBookings = true;
   List<CleanerBooking>? _bookings;
   Timer? _pollTimer;
+  List<ChatMessage> _messages = const [];
+  StreamSubscription<List<ChatMessage>>? _messagesSub;
 
   @override
   void initState() {
@@ -42,11 +52,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _loadBookings();
     _pollTimer = Timer.periodic(_pollInterval, (_) => _loadBookings());
+    // Customer messages arrive live (Realtime) and feed the unread counts on
+    // job cards; an error just leaves them at zero.
+    _messagesSub = _api.watchMyMessages().listen(
+      (messages) => setState(() => _messages = messages),
+      onError: (Object e) => debugPrint('Messages unavailable: $e'),
+    );
   }
 
   @override
   void dispose() {
     _pollTimer?.cancel();
+    _messagesSub?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -90,6 +107,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   void _onCleanerUpdated(Cleaner updated) => setState(() => _cleaner = updated);
 
+  Future<void> _openJob(CleanerBooking booking) async {
+    final changed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (_) => JobScreen(booking: booking, allBookings: _bookings ?? const [])),
+    );
+    if (changed == true) _loadBookings();
+  }
+
+  void _selectTab(int i) {
+    if (i == _tabIndex) return;
+    HapticFeedback.selectionClick();
+    setState(() => _tabIndex = i);
+  }
+
   Future<void> _logout() async {
     await _api.logout();
     if (!mounted) return;
@@ -101,6 +131,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.tokens;
     final bookings = _bookings ?? [];
     final pendingCount = bookings.where((b) => b.status == 'pending').length;
 
@@ -112,16 +143,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             if (_cleaner.isPendingApproval)
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                color: kBrandSecondary.withOpacity(0.12),
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                color: s.goldSoft,
                 child: Row(
                   children: [
-                    Icon(Icons.hourglass_top, size: 16, color: kBrandSecondary),
-                    const SizedBox(width: 8),
-                    const Expanded(
+                    Icon(LucideIcons.hourglass, size: 16, color: s.gold),
+                    const SizedBox(width: 10),
+                    Expanded(
                       child: Text(
                         "Your application is awaiting admin approval — you can't be assigned jobs yet.",
-                        style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
+                        style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: s.gold),
                       ),
                     ),
                   ],
@@ -132,72 +163,120 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 index: _tabIndex,
                 children: [
                   ScheduleTab(
+                    cleaner: _cleaner,
                     bookings: bookings,
                     loading: _loadingBookings && _bookings == null,
                     onRefresh: _loadBookings,
+                    onCleanerUpdated: _onCleanerUpdated,
+                    onOpenEarnings: () => _selectTab(1),
+                    unread: unreadByBooking(_messages),
+                    onOpenJob: _openJob,
+                  ),
+                  EarningsTab(
+                    bookings: bookings,
+                    loading: _loadingBookings && _bookings == null,
+                    onRefresh: _loadBookings,
+                    onOpenJob: _openJob,
                   ),
                   ServicesTab(cleanerId: _cleaner.id),
-                  ProfileTab(cleaner: _cleaner, onCleanerUpdated: _onCleanerUpdated, onLogout: _logout),
+                  ProfileTab(
+                    cleaner: _cleaner,
+                    onCleanerUpdated: _onCleanerUpdated,
+                    onLogout: _logout,
+                    upcomingCount: bookings
+                        .where((b) => b.status == 'confirmed' && b.date.compareTo(isoDate(DateTime.now())) >= 0)
+                        .length,
+                    onOpenEarnings: () => _selectTab(1),
+                  ),
                 ],
               ),
             ),
           ],
         ),
       ),
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _tabIndex,
-        onTap: (i) => setState(() => _tabIndex = i),
-        items: [
-          BottomNavigationBarItem(
-            icon: _BadgeIcon(icon: Icons.calendar_today_outlined, count: pendingCount),
-            activeIcon: _BadgeIcon(icon: Icons.calendar_today, count: pendingCount),
-            label: 'Schedule',
-          ),
-          const BottomNavigationBarItem(
-            icon: Icon(Icons.cleaning_services_outlined),
-            activeIcon: Icon(Icons.cleaning_services),
-            label: 'Services',
-          ),
-          const BottomNavigationBarItem(
-            icon: Icon(Icons.person_outline),
-            activeIcon: Icon(Icons.person),
-            label: 'Profile',
-          ),
-        ],
+      bottomNavigationBar: CleanerNavBar(index: _tabIndex, onSelected: _selectTab, scheduleBadge: pendingCount),
+    );
+  }
+}
+
+/// Bottom nav: Schedule (badge = requests awaiting you), Earnings, Services, Profile.
+class CleanerNavBar extends StatelessWidget {
+  const CleanerNavBar({super.key, required this.index, required this.onSelected, this.scheduleBadge = 0});
+  final int index;
+  final ValueChanged<int> onSelected;
+  final int scheduleBadge;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.tokens;
+    final bottom = max(MediaQuery.paddingOf(context).bottom, 10.0);
+    Widget tab(int i, IconData icon, String label, [int badge = 0]) => Expanded(
+          child: _NavItem(icon: icon, label: label, selected: index == i, badge: badge, onTap: () => onSelected(i)),
+        );
+    return DecoratedBox(
+      decoration: BoxDecoration(color: Colors.white, border: Border(top: BorderSide(color: s.line))),
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(10, 10, 10, bottom),
+        child: Row(children: [
+          tab(0, LucideIcons.calendarDays, 'Schedule', scheduleBadge),
+          tab(1, LucideIcons.chartColumn, 'Earnings'),
+          tab(2, LucideIcons.sparkles, 'Services'),
+          tab(3, LucideIcons.user, 'Profile'),
+        ]),
       ),
     );
   }
 }
 
-/// A bottom-nav icon with a small red count badge — the "unread" indicator for
-/// bookings still awaiting this cleaner's confirmation.
-class _BadgeIcon extends StatelessWidget {
+class _NavItem extends StatelessWidget {
+  const _NavItem({required this.icon, required this.label, required this.selected, required this.badge, required this.onTap});
   final IconData icon;
-  final int count;
-  const _BadgeIcon({required this.icon, required this.count});
+  final String label;
+  final bool selected;
+  final int badge;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    if (count == 0) return Icon(icon);
-    return Stack(
-      clipBehavior: Clip.none,
-      children: [
-        Icon(icon),
-        Positioned(
-          right: -7,
-          top: -4,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-            constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
-            decoration: const BoxDecoration(color: Colors.redAccent, shape: BoxShape.circle),
-            child: Text(
-              count > 9 ? '9+' : '$count',
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold, height: 1.2),
+    final s = context.tokens;
+    final color = selected ? context.colors.primary : s.muted;
+    return Semantics(
+      selected: selected,
+      button: true,
+      label: badge > 0 ? '$label, $badge' : label,
+      excludeSemantics: true,
+      child: InkResponse(
+        onTap: onTap,
+        radius: 32,
+        child: Stack(clipBehavior: Clip.none, alignment: Alignment.topCenter, children: [
+          Column(mainAxisSize: MainAxisSize.min, children: [
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOut,
+              width: 52,
+              height: 30,
+              decoration: ShapeDecoration(
+                shape: const StadiumBorder(),
+                color: selected ? s.primarySoft : Colors.transparent,
+              ),
+              child: Icon(icon, size: 21, color: color),
             ),
-          ),
-        ),
-      ],
+            const SizedBox(height: 4),
+            Text(label,
+                style: TextStyle(fontSize: 11.5, fontWeight: selected ? FontWeight.w700 : FontWeight.w500, color: color)),
+          ]),
+          if (badge > 0)
+            Positioned(
+              top: -2,
+              left: 0,
+              right: 0,
+              child: Align(
+                alignment: const Alignment(.55, 0),
+                child: CountBadge(badge),
+              ),
+            ),
+        ]),
+      ),
     );
   }
 }

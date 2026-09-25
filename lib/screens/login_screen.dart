@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../api_client.dart';
-import '../main.dart';
+import '../ui/layout.dart';
+import '../ui/tiles.dart';
 import 'home_screen.dart';
 import 'register_screen.dart';
 
@@ -62,44 +63,13 @@ class _LoginScreenState extends State<LoginScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Container(
-                    width: 64,
-                    height: 64,
-                    decoration: const BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [kBrandPrimary, kBrandSecondary],
-                      ),
-                    ),
-                    child: const Icon(Icons.cleaning_services, color: Colors.white, size: 28),
-                  ),
+                  const Center(child: BrandMark(size: 64)),
                   const SizedBox(height: 16),
-                  const Text(
-                    'Spotless Cleaner',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800, color: kBrandInk),
-                  ),
+                  Text('Spotless Cleaner', textAlign: TextAlign.center, style: context.tokens.heading(26)),
                   const SizedBox(height: 8),
-                  const Text(
-                    'Log in to manage your jobs',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.black54),
-                  ),
+                  Text('Log in to manage your jobs', textAlign: TextAlign.center, style: TextStyle(color: context.tokens.muted)),
                   const SizedBox(height: 32),
-                  if (_error != null) ...[
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.red.shade50,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.red.shade200),
-                      ),
-                      child: Text(_error!, style: TextStyle(color: Colors.red.shade700)),
-                    ),
-                    const SizedBox(height: 16),
-                  ],
+                  if (_error != null) ...[ErrorBanner(_error!), const SizedBox(height: 16)],
                   TextFormField(
                     controller: _emailController,
                     keyboardType: TextInputType.emailAddress,

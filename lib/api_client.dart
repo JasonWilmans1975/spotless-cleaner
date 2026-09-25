@@ -1,19 +1,30 @@
 import 'dart:convert';
 
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
-/// Where the Spotless Solutions server lives — same rules as the customer app:
+import 'format.dart';
+
+/// Supabase project URL and anon key, read from the gitignored `.env` at the
+/// repo root (loaded in main.dart). Copy `.env.example` to `.env` and fill in.
 ///
-/// - Android emulator: use 'http://10.0.2.2:3000' (the emulator's alias for
-///   your Mac's localhost).
-/// - iOS Simulator: 'http://localhost:3000' works directly.
-/// - A physical phone: use your Mac's LAN IP, e.g. 'http://192.168.1.23:3000',
-///   with the phone on the same Wi-Fi network as your Mac.
-const String kApiBaseUrl = 'http://localhost:3000';
+/// The anon key is public by design and is meant to be guarded by row-level
+/// security on the tables — never put a service-role key in `.env`, it would
+/// ship inside the app bundle.
+String get kSupabaseUrl => dotenv.env['SUPABASE_URL'] ?? '';
+String get kSupabaseAnonKey => dotenv.env['SUPABASE_ANON_KEY'] ?? '';
 
-/// Thrown for any API error — network failure, non-2xx response, or a body
-/// that isn't the JSON shape we expect. `message` is safe to show to the user.
+/// Storage bucket holding cleaner profile photos, as `<cleaners.id>.<ext>`.
+/// Created by the migration in spotless-cleaning/supabase/migrations.
+const String kAvatarBucket = 'cleaner-avatars';
+
+/// Private bucket for before/after job photos, as `<booking_id>/<kind>/<name>`
+/// (spotless-supabase migration 20260925090000).
+const String kJobPhotosBucket = 'job-photos';
+
+/// Thrown for any API error — network failure, a rejected query, or a row
+/// that isn't the shape we expect. `message` is safe to show to the user.
 class ApiException implements Exception {
   final String message;
   ApiException(this.message);
@@ -21,6 +32,10 @@ class ApiException implements Exception {
   @override
   String toString() => message;
 }
+
+/// Postgres stores several of these flags as integer 1/0 rather than boolean,
+/// so accept either shape.
+bool _asBool(dynamic v) => v == true || v == 1;
 
 /// The logged-in cleaner's own profile.
 class Cleaner {
@@ -33,8 +48,34 @@ class Cleaner {
   final String? avatar;
   final String status; // 'pending' | 'approved'
   final bool active;
+  final String? bio;
+
+  /// False while the cleaner has paused new bookings (Schedule switch).
+  final bool acceptingBookings;
 
   bool get isPendingApproval => status == 'pending';
+
+  /// Same cleaner with a new photo — keeps every other field (bio, pause…).
+  Cleaner withAvatar(String? avatar) => Cleaner(
+        id: id,
+        name: name,
+        email: email,
+        phone: phone,
+        address: address,
+        postcode: postcode,
+        avatar: avatar,
+        status: status,
+        active: active,
+        bio: bio,
+        acceptingBookings: acceptingBookings,
+      );
+
+  /// The avatar as something [NetworkImage] can actually load. Photos uploaded
+  /// through the app are absolute Supabase Storage URLs; the seeded rows hold
+  /// server-relative paths like '/images/avatars/sw.png' that nothing serves
+  /// any more, so those read as "no photo" and fall back to initials.
+  String? get avatarUrl =>
+      (avatar != null && avatar!.startsWith('http')) ? avatar : null;
 
   Cleaner({
     required this.id,
@@ -46,6 +87,8 @@ class Cleaner {
     required this.avatar,
     required this.status,
     required this.active,
+    this.bio,
+    this.acceptingBookings = true,
   });
 
   factory Cleaner.fromJson(Map<String, dynamic> json) {
@@ -58,7 +101,10 @@ class Cleaner {
       postcode: json['postcode'] as String?,
       avatar: json['avatar'] as String?,
       status: json['status'] as String? ?? 'pending',
-      active: json['active'] as bool? ?? false,
+      active: _asBool(json['active']),
+      bio: json['bio'] as String?,
+      // Missing column (migration not applied) reads as "accepting".
+      acceptingBookings: json['accepting_bookings'] == null || _asBool(json['accepting_bookings']),
     );
   }
 }
@@ -151,7 +197,8 @@ class MyServiceRate {
   Map<String, dynamic> toJson() => {'id': serviceId, 'priceCents': priceCents};
 }
 
-/// One entry in a cleaner's rate-change history.
+/// One entry in a cleaner's rate-change history. [serviceName], [priceType] and
+/// [defaultPriceCents] come from the joined `services` row.
 class PriceHistoryEntry {
   final int id;
   final int serviceId;
@@ -176,12 +223,13 @@ class PriceHistoryEntry {
   });
 
   factory PriceHistoryEntry.fromJson(Map<String, dynamic> json) {
+    final service = json['services'] as Map<String, dynamic>? ?? const {};
     return PriceHistoryEntry(
       id: json['id'] as int,
       serviceId: json['service_id'] as int,
-      serviceName: json['service_name'] as String? ?? '',
-      priceType: json['price_type'] as String? ?? 'hourly',
-      defaultPriceCents: (json['default_price_cents'] as num?)?.toInt() ?? 0,
+      serviceName: service['name'] as String? ?? '',
+      priceType: service['price_type'] as String? ?? 'hourly',
+      defaultPriceCents: (service['price_cents'] as num?)?.toInt() ?? 0,
       oldPriceCents: (json['old_price_cents'] as num?)?.toInt(),
       newPriceCents: (json['new_price_cents'] as num?)?.toInt(),
       changedBy: json['changed_by'] as String? ?? 'admin',
@@ -190,7 +238,8 @@ class PriceHistoryEntry {
   }
 }
 
-/// One of the logged-in cleaner's assigned bookings.
+/// One of the logged-in cleaner's assigned bookings. [serviceName] comes from
+/// the joined `services` row.
 class CleanerBooking {
   final int id;
   final String ref;
@@ -204,8 +253,30 @@ class CleanerBooking {
   final String postcode;
   final int priceCents;
   final String? customerComment;
+  final int? serviceId;
+  final String serviceSlug;
+  final List<String> serviceFeatures; // the service's "what's included" (job checklist)
+  final String phone;
+  final String email;
+  final String notes; // the customer's notes for the cleaner (access, pets…)
+  final int durationMinutes;
+  final DateTime? createdAt;
+  final DateTime? confirmedAt;
+  final DateTime? startedAt; // "Start job" (migration 20260925090000)
+  final DateTime? completedAt;
 
   bool get isPast => status == 'completed' || status == 'cancelled';
+
+  /// Confirmed and started, not yet finished.
+  bool get inProgress => status == 'confirmed' && startedAt != null;
+
+  /// Local start time, or null if the row's date/time don't parse.
+  DateTime? get startsAt {
+    final d = DateTime.tryParse(date);
+    if (d == null || !startTime.contains(':')) return null;
+    final m = toMinutes(startTime);
+    return DateTime(d.year, d.month, d.day, m ~/ 60, m % 60);
+  }
 
   CleanerBooking({
     required this.id,
@@ -220,13 +291,25 @@ class CleanerBooking {
     required this.postcode,
     required this.priceCents,
     required this.customerComment,
+    this.serviceId,
+    this.serviceSlug = '',
+    this.serviceFeatures = const [],
+    this.phone = '',
+    this.email = '',
+    this.notes = '',
+    this.durationMinutes = 0,
+    this.createdAt,
+    this.confirmedAt,
+    this.startedAt,
+    this.completedAt,
   });
 
   factory CleanerBooking.fromJson(Map<String, dynamic> json) {
+    final service = json['services'] as Map<String, dynamic>? ?? const {};
     return CleanerBooking(
       id: json['id'] as int,
       ref: json['ref'] as String? ?? '',
-      serviceName: json['service_name'] as String? ?? '',
+      serviceName: service['name'] as String? ?? '',
       date: json['date'] as String? ?? '',
       startTime: json['start_time'] as String? ?? '',
       endTime: json['end_time'] as String? ?? '',
@@ -236,15 +319,160 @@ class CleanerBooking {
       postcode: json['postcode'] as String? ?? '',
       priceCents: (json['price_cents'] as num?)?.toInt() ?? 0,
       customerComment: json['customer_comment'] as String?,
+      serviceId: (json['service_id'] as num?)?.toInt(),
+      serviceSlug: service['slug'] as String? ?? '',
+      serviceFeatures: _features(service['features']),
+      phone: json['phone'] as String? ?? '',
+      email: json['email'] as String? ?? '',
+      notes: json['notes'] as String? ?? '',
+      durationMinutes: (json['duration_minutes'] as num?)?.toInt() ?? 0,
+      createdAt: DateTime.tryParse(json['created_at'] as String? ?? '')?.toLocal(),
+      confirmedAt: DateTime.tryParse(json['confirmed_at'] as String? ?? '')?.toLocal(),
+      startedAt: DateTime.tryParse(json['started_at'] as String? ?? '')?.toLocal(),
+      completedAt: DateTime.tryParse(json['completed_at'] as String? ?? '')?.toLocal(),
     );
   }
 }
 
+/// `services.features` is a JSON-encoded string in Postgres (sometimes already
+/// a list) — decoded leniently, empty on anything unexpected.
+List<String> _features(dynamic raw) {
+  if (raw is List) return raw.map((e) => e.toString()).toList();
+  if (raw is String) {
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is List) return decoded.map((e) => e.toString()).toList();
+    } catch (_) {}
+  }
+  return const [];
+}
+
+/// A day the cleaner has marked as off (`cleaner_time_off`).
+class TimeOff {
+  final int id;
+  final DateTime date;
+  final String? reason;
+
+  TimeOff({required this.id, required this.date, this.reason});
+
+  factory TimeOff.fromJson(Map<String, dynamic> json) => TimeOff(
+        id: (json['id'] as num).toInt(),
+        date: DateTime.parse(json['date'] as String),
+        reason: json['reason'] as String?,
+      );
+}
+
+/// A before/after photo on a job, with a short-lived signed URL to show it.
+class JobPhoto {
+  final int id;
+  final int bookingId;
+  final String kind; // 'before' | 'after'
+  final String path;
+  final String? url;
+
+  JobPhoto({required this.id, required this.bookingId, required this.kind, required this.path, this.url});
+
+  factory JobPhoto.fromJson(Map<String, dynamic> json, {String? url}) => JobPhoto(
+        id: (json['id'] as num).toInt(),
+        bookingId: (json['booking_id'] as num).toInt(),
+        kind: json['kind'] as String? ?? 'before',
+        path: json['path'] as String? ?? '',
+        url: url,
+      );
+}
+
+/// One chat message on a booking (spotless-supabase migration 20260924180000),
+/// seen from the cleaner's side.
+class ChatMessage {
+  final int id;
+  final int bookingId;
+  final bool fromCleaner;
+  final String body;
+  final DateTime createdAt;
+  final DateTime? readAt;
+
+  ChatMessage({
+    required this.id,
+    required this.bookingId,
+    required this.fromCleaner,
+    required this.body,
+    required this.createdAt,
+    this.readAt,
+  });
+
+  factory ChatMessage.fromJson(Map<String, dynamic> json) => ChatMessage(
+        id: (json['id'] as num).toInt(),
+        bookingId: (json['booking_id'] as num).toInt(),
+        fromCleaner: json['sender_role'] == 'cleaner',
+        body: json['body'] as String? ?? '',
+        createdAt: DateTime.tryParse(json['created_at'] as String? ?? '')?.toLocal() ?? DateTime.now(),
+        readAt: DateTime.tryParse(json['read_at'] as String? ?? ''),
+      );
+
+  bool get unreadByCleaner => !fromCleaner && readAt == null;
+}
+
+/// Unread customer messages per booking id.
+Map<int, int> unreadByBooking(List<ChatMessage> messages) {
+  final out = <int, int>{};
+  for (final m in messages) {
+    if (m.unreadByCleaner) out[m.bookingId] = (out[m.bookingId] ?? 0) + 1;
+  }
+  return out;
+}
+
+/// A customer's review of one of this cleaner's jobs (migration 20260924150000).
+class Review {
+  final int bookingId;
+  final int rating;
+  final List<String> tags;
+  final String? comment;
+  final int tipCents;
+  final String reviewerName;
+  final String serviceName;
+  final DateTime? createdAt;
+
+  Review({
+    required this.bookingId,
+    required this.rating,
+    this.tags = const [],
+    this.comment,
+    this.tipCents = 0,
+    required this.reviewerName,
+    this.serviceName = '',
+    this.createdAt,
+  });
+
+  factory Review.fromJson(Map<String, dynamic> json) => Review(
+        bookingId: (json['booking_id'] as num?)?.toInt() ?? 0,
+        rating: (json['rating'] as num?)?.toInt() ?? 0,
+        tags: [for (final t in (json['tags'] as List? ?? const [])) t.toString()],
+        comment: json['comment'] as String?,
+        tipCents: (json['tip_cents'] as num?)?.toInt() ?? 0,
+        reviewerName: json['reviewer_name'] as String? ?? '',
+        serviceName: json['service_name'] as String? ?? '',
+        createdAt: DateTime.tryParse(json['created_at'] as String? ?? '')?.toLocal(),
+      );
+}
+
+/// This cleaner's public numbers from `cleaner_stats()` (migration 20260923170000).
+class CleanerStats {
+  final int completedJobs;
+  final double? avgRating;
+  final int reviewCount;
+
+  CleanerStats({this.completedJobs = 0, this.avgRating, this.reviewCount = 0});
+
+  factory CleanerStats.fromJson(Map<String, dynamic> json) => CleanerStats(
+        completedJobs: (json['completed_jobs'] as num?)?.toInt() ?? 0,
+        avgRating: (json['avg_rating'] as num?)?.toDouble(),
+        reviewCount: (json['review_count'] as num?)?.toInt() ?? 0,
+      );
+}
+
 /// One day of a cleaner's weekly working hours — a weekday (0=Mon..6=Sun) they're
 /// available to be booked, with a start/end time. A weekday with no row means
-/// they're off that day. `start`/`end` are what the server's PUT endpoint expects;
-/// GET returns `start_time`/`end_time` instead — [fromJson] reads the GET shape,
-/// [toJson] writes the PUT shape.
+/// they're off that day.
 class WorkingHours {
   final int weekday;
   final String startTime; // 'HH:MM'
@@ -263,62 +491,44 @@ class WorkingHours {
   Map<String, dynamic> toJson() => {'weekday': weekday, 'start': startTime, 'end': endTime};
 }
 
-/// Thin wrapper around the Spotless Solutions JSON API's cleaner-facing routes.
+/// Cleaner-facing data access, talking straight to Supabase — Auth for
+/// sign-up/sign-in, PostgREST for the tables, Storage for profile photos.
 ///
-/// Every authenticated request sends the stored session token as
-/// "Authorization: Bearer <token>" — same contract as the customer app, see
-/// src/auth.js on the server (cleanerTokenFromReq checks that header first,
-/// then falls back to the website's ss_cleaner cookie).
+/// The session is persisted by supabase_flutter itself, so there's no token to
+/// hold on to here. A cleaner's `auth.users` row is tied to their `cleaners`
+/// row by `cleaners.auth_user_id`; [_cleanerId] resolves one to the other.
 class ApiClient {
-  static const _tokenKey = 'ss_cleaner_token';
+  SupabaseClient get _db => Supabase.instance.client;
 
-  Future<String?> _readToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_tokenKey);
-  }
-
-  Future<void> _saveToken(String token) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_tokenKey, token);
-  }
-
-  Future<void> _clearToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_tokenKey);
-  }
-
-  Map<String, dynamic> _decode(http.Response res) {
-    Map<String, dynamic> body;
+  /// Runs [body], turning anything Supabase throws into an [ApiException] whose
+  /// message is safe to put in front of a user.
+  Future<T> _guard<T>(Future<T> Function() body) async {
     try {
-      body = jsonDecode(res.body) as Map<String, dynamic>;
-    } catch (_) {
-      throw ApiException(
-        'The server sent back something unexpected (status ${res.statusCode}). '
-            'Double-check kApiBaseUrl in api_client.dart and that the server is running.',
-      );
-    }
-    if (res.statusCode >= 400) {
-      throw ApiException(body['error'] as String? ?? 'Something went wrong (status ${res.statusCode}).');
-    }
-    return body;
-  }
-
-  Future<http.Response> _safeRequest(Future<http.Response> Function() send) async {
-    try {
-      return await send();
+      return await body();
     } on ApiException {
       rethrow;
+    } on AuthException catch (e) {
+      throw ApiException(e.message);
+    } on PostgrestException catch (e) {
+      throw ApiException(e.message);
+    } on StorageException catch (e) {
+      throw ApiException(e.message);
     } catch (_) {
-      throw ApiException("Couldn't reach the server at $kApiBaseUrl. Is it running, and is the address right for how you're testing?");
+      throw ApiException(
+        "Couldn't reach Supabase at $kSupabaseUrl. Check your connection, and that "
+        "SUPABASE_URL / SUPABASE_ANON_KEY in .env are right.",
+      );
     }
   }
 
-  Future<Map<String, String>> _authHeaders({bool json = true}) async {
-    final token = await _readToken();
-    return {
-      if (json) 'Content-Type': 'application/json',
-      if (token != null) 'Authorization': 'Bearer $token',
-    };
+  /// The `cleaners.id` for the signed-in user. Throws if nobody is signed in,
+  /// or if their auth account has no matching cleaner row.
+  Future<int> _cleanerId() async {
+    final userId = _db.auth.currentUser?.id;
+    if (userId == null) throw ApiException('You need to sign in again.');
+    final row = await _db.from('cleaners').select('id').eq('auth_user_id', userId).maybeSingle();
+    if (row == null) throw ApiException('No cleaner profile is linked to this account.');
+    return row['id'] as int;
   }
 
   // ---- Auth ----
@@ -331,143 +541,180 @@ class ApiClient {
     required String address,
     required String postcode,
   }) async {
-    final res = await _safeRequest(() => http.post(
-      Uri.parse('$kApiBaseUrl/api/cleaner/auth/register'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'name': name, 'email': email, 'password': password,
-        'phone': phone, 'address': address, 'postcode': postcode,
-      }),
-    ));
-    final body = _decode(res);
-    await _saveToken(body['token'] as String);
-    return Cleaner.fromJson(body['cleaner'] as Map<String, dynamic>);
+    return _guard(() async {
+      final auth = await _db.auth.signUp(email: email, password: password);
+      final userId = auth.user?.id;
+      if (userId == null) {
+        throw ApiException('Check your inbox to confirm your email address, then sign in.');
+      }
+      // New applicants start pending an admin review, same as the web signup.
+      final row = await _db.from('cleaners').insert({
+        'auth_user_id': userId,
+        'name': name,
+        'email': email,
+        'phone': phone,
+        'address': address,
+        'postcode': postcode,
+        'initials': _initials(name),
+        'status': 'pending',
+        'active': 0,
+      }).select().single();
+      return Cleaner.fromJson(row);
+    });
   }
 
   Future<Cleaner> login({required String email, required String password}) async {
-    final res = await _safeRequest(() => http.post(
-      Uri.parse('$kApiBaseUrl/api/cleaner/auth/login'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'email': email, 'password': password}),
-    ));
-    final body = _decode(res);
-    await _saveToken(body['token'] as String);
-    return Cleaner.fromJson(body['cleaner'] as Map<String, dynamic>);
+    return _guard(() async {
+      await _db.auth.signInWithPassword(email: email, password: password);
+      final cleaner = await me();
+      if (cleaner == null) throw ApiException('No cleaner profile is linked to this account.');
+      return cleaner;
+    });
   }
 
   Future<void> logout() async {
-    final token = await _readToken();
-    if (token != null) {
-      try {
-        await http.post(
-          Uri.parse('$kApiBaseUrl/api/cleaner/auth/logout'),
-          headers: {'Authorization': 'Bearer $token'},
-        );
-      } catch (_) {
-        // Best-effort — proceed to clear the local token regardless.
-      }
+    try {
+      await _db.auth.signOut();
+    } catch (_) {
+      // Best-effort — the local session is cleared either way.
     }
-    await _clearToken();
   }
 
-  /// Returns null if there's no session, or if the stored token is no longer valid.
+  /// Returns null if there's no session, or the session's user has no cleaner row.
   Future<Cleaner?> me() async {
-    final token = await _readToken();
-    if (token == null) return null;
-    final res = await _safeRequest(() => http.get(
-      Uri.parse('$kApiBaseUrl/api/cleaner/me'),
-      headers: {'Authorization': 'Bearer $token'},
-    ));
-    final body = _decode(res);
-    final cleanerJson = body['cleaner'];
-    if (cleanerJson == null) {
-      await _clearToken();
-      return null;
-    }
-    return Cleaner.fromJson(cleanerJson as Map<String, dynamic>);
+    return _guard(() async {
+      final userId = _db.auth.currentUser?.id;
+      if (userId == null) return null;
+      final row = await _db.from('cleaners').select().eq('auth_user_id', userId).maybeSingle();
+      return row == null ? null : Cleaner.fromJson(row);
+    });
   }
 
   // ---- Profile ----
 
-  Future<Cleaner> updateProfile({String? phone, String? address, String? postcode}) async {
-    final headers = await _authHeaders();
-    final res = await _safeRequest(() => http.patch(
-      Uri.parse('$kApiBaseUrl/api/cleaner/me'),
-      headers: headers,
-      body: jsonEncode({
-        if (phone != null) 'phone': phone,
-        if (address != null) 'address': address,
-        if (postcode != null) 'postcode': postcode,
-      }),
-    ));
-    final body = _decode(res);
-    return Cleaner.fromJson(body['cleaner'] as Map<String, dynamic>);
+  Future<Cleaner> updateProfile({String? phone, String? address, String? postcode, String? bio}) async {
+    return _guard(() async {
+      final id = await _cleanerId();
+      final row = await _db
+          .from('cleaners')
+          .update({
+            'phone': ?phone,
+            'address': ?address,
+            'postcode': ?postcode,
+            'bio': ?bio,
+          })
+          .eq('id', id)
+          .select()
+          .single();
+      return Cleaner.fromJson(row);
+    });
   }
 
   /// Replaces this cleaner's whole set of offered services + rates in one go —
   /// same contract the website uses, so every change (add one, remove one,
-  /// edit a rate) sends the full current list.
+  /// edit a rate) sends the full current list. Rate changes are written to
+  /// `cleaner_price_history` so the history screen stays accurate.
+  ///
+  /// ponytail: delete-then-insert rather than one transaction — PostgREST has no
+  /// client-side multi-statement transaction. A failure between the two leaves
+  /// the cleaner with no services; move this into a Postgres RPC if that matters.
   Future<void> updateMyServices(List<MyServiceRate> services) async {
-    final headers = await _authHeaders();
-    final res = await _safeRequest(() => http.patch(
-      Uri.parse('$kApiBaseUrl/api/cleaner/me'),
-      headers: headers,
-      body: jsonEncode({'services': services.map((s) => s.toJson()).toList()}),
-    ));
-    _decode(res);
+    return _guard(() async {
+      final id = await _cleanerId();
+      final existing = await _db
+          .from('cleaner_services')
+          .select('service_id, price_cents')
+          .eq('cleaner_id', id);
+      final oldRates = {
+        for (final r in existing) r['service_id'] as int: (r['price_cents'] as num?)?.toInt(),
+      };
+
+      await _db.from('cleaner_services').delete().eq('cleaner_id', id);
+      if (services.isNotEmpty) {
+        await _db.from('cleaner_services').insert([
+          for (final s in services)
+            {'cleaner_id': id, 'service_id': s.serviceId, 'price_cents': s.priceCents},
+        ]);
+      }
+
+      final changes = [
+        for (final s in services)
+          if (!oldRates.containsKey(s.serviceId) || oldRates[s.serviceId] != s.priceCents)
+            {
+              'cleaner_id': id,
+              'service_id': s.serviceId,
+              'old_price_cents': oldRates[s.serviceId],
+              'new_price_cents': s.priceCents,
+              'changed_by': 'cleaner',
+            },
+      ];
+      if (changes.isNotEmpty) await _db.from('cleaner_price_history').insert(changes);
+    });
   }
 
   /// Uploads a profile photo already read into memory as [imageBytes], with
-  /// [extension] one of png/jpg/jpeg/webp/gif (matches what the server accepts).
-  /// Returns the new avatar URL.
+  /// [extension] one of png/jpg/jpeg/webp/gif. Stores it in the [kAvatarBucket]
+  /// Storage bucket and returns its public URL.
   Future<String> uploadPhoto(List<int> imageBytes, String extension) async {
     final mimeByExt = {'png': 'png', 'jpg': 'jpeg', 'jpeg': 'jpeg', 'webp': 'webp', 'gif': 'gif'};
     final mime = mimeByExt[extension.toLowerCase()];
     if (mime == null) throw ApiException('Please choose a PNG, JPG, WEBP or GIF image');
-    final dataUrl = 'data:image/$mime;base64,${base64Encode(imageBytes)}';
-    final headers = await _authHeaders();
-    final res = await _safeRequest(() => http.post(
-      Uri.parse('$kApiBaseUrl/api/cleaner/me/photo'),
-      headers: headers,
-      body: jsonEncode({'imageDataUrl': dataUrl}),
-    ));
-    final body = _decode(res);
-    return body['avatar'] as String;
+    return _guard(() async {
+      final id = await _cleanerId();
+      // One stable path per cleaner, overwritten on each upload, so old photos
+      // don't pile up in the bucket.
+      final path = '$id.$extension';
+      await _db.storage.from(kAvatarBucket).uploadBinary(
+            path,
+            Uint8List.fromList(imageBytes),
+            fileOptions: FileOptions(contentType: 'image/$mime', upsert: true),
+          );
+      // Cache-bust, or the CDN keeps serving the previous photo at this path.
+      final url = '${_db.storage.from(kAvatarBucket).getPublicUrl(path)}'
+          '?v=${DateTime.now().millisecondsSinceEpoch}';
+      await _db.from('cleaners').update({'avatar': url}).eq('id', id);
+      return url;
+    });
   }
 
   // ---- Services & rates ----
 
   /// The full active, approved service menu — same list customers book from.
   Future<List<MenuService>> getServices() async {
-    final res = await _safeRequest(() => http.get(Uri.parse('$kApiBaseUrl/api/services')));
-    final body = _decode(res);
-    final list = body['services'] as List<dynamic>? ?? [];
-    return list.map((s) => MenuService.fromJson(s as Map<String, dynamic>)).toList();
+    return _guard(() async {
+      final rows = await _db
+          .from('services')
+          .select()
+          .eq('status', 'approved')
+          .eq('active', 1)
+          .order('sort_order');
+      return rows.map(MenuService.fromJson).toList();
+    });
   }
 
   /// This cleaner's own rate rows — cross-reference against [getServices] by id
   /// to know which services they offer and at what rate.
   Future<List<MyServiceRate>> getMyServiceRates() async {
-    final headers = await _authHeaders(json: false);
-    final res = await _safeRequest(() => http.get(
-      Uri.parse('$kApiBaseUrl/api/cleaner/me/services'),
-      headers: headers,
-    ));
-    final body = _decode(res);
-    final list = body['services'] as List<dynamic>? ?? [];
-    return list.map((s) => MyServiceRate.fromJson(s as Map<String, dynamic>)).toList();
+    return _guard(() async {
+      final id = await _cleanerId();
+      final rows =
+          await _db.from('cleaner_services').select('service_id, price_cents').eq('cleaner_id', id);
+      return rows.map(MyServiceRate.fromJson).toList();
+    });
   }
 
   /// Services this cleaner proposed themselves that are still awaiting admin review.
   Future<List<MenuService>> getPendingProposedServices() async {
-    final headers = await _authHeaders(json: false);
-    final res = await _safeRequest(() => http.get(
-      Uri.parse('$kApiBaseUrl/api/cleaner/me/pending-services'),
-      headers: headers,
-    ));
-    final body = _decode(res);
-    final list = body['pendingServices'] as List<dynamic>? ?? [];
-    return list.map((s) => MenuService.fromJson(s as Map<String, dynamic>)).toList();
+    return _guard(() async {
+      final id = await _cleanerId();
+      final rows = await _db
+          .from('services')
+          .select()
+          .eq('created_by_cleaner_id', id)
+          .eq('status', 'pending')
+          .order('id');
+      return rows.map(MenuService.fromJson).toList();
+    });
   }
 
   /// Proposes a brand-new service not already on the menu — saved pending admin
@@ -482,30 +729,35 @@ class ApiClient {
     String durationLabel = '',
     List<String> features = const [],
   }) async {
-    final headers = await _authHeaders();
-    final res = await _safeRequest(() => http.post(
-      Uri.parse('$kApiBaseUrl/api/cleaner/me/services'),
-      headers: headers,
-      body: jsonEncode({
+    return _guard(() async {
+      final id = await _cleanerId();
+      final row = await _db.from('services').insert({
         'name': name,
+        'slug': _slugify(name),
         'icon': icon,
         'description': description,
-        'priceType': priceType,
-        'price': price,
-        if (durationMinutes != null) 'durationMinutes': durationMinutes,
-        'durationLabel': durationLabel,
-        'features': features,
-      }),
-    ));
-    final body = _decode(res);
-    return body['id'] as int;
+        'price_type': priceType,
+        'price_cents': (price * 100).round(),
+        'duration_minutes': durationMinutes ?? 60,
+        'duration_label': durationLabel,
+        'features': jsonEncode(features),
+        'status': 'pending',
+        'active': 1,
+        'created_by_cleaner_id': id,
+      }).select('id').single();
+      final serviceId = row['id'] as int;
+      await _db
+          .from('cleaner_services')
+          .insert({'cleaner_id': id, 'service_id': serviceId, 'price_cents': null});
+      return serviceId;
+    });
   }
 
   /// Edits the full details of a service this cleaner proposed themselves —
-  /// name, icon, description, pricing, duration, and features. Only works for
-  /// services with `created_by_cleaner_id` equal to this cleaner (the server
-  /// enforces this too); works whether the proposal is still pending review
-  /// or already approved and live. Does not touch approval status either way.
+  /// name, icon, description, pricing, duration, and features. The
+  /// `created_by_cleaner_id` filter is what keeps this to their own proposals;
+  /// works whether the proposal is still pending review or already approved and
+  /// live, and doesn't change approval status either way.
   Future<MenuService> updateProposedService({
     required int serviceId,
     required String name,
@@ -517,34 +769,199 @@ class ApiClient {
     String durationLabel = '',
     List<String> features = const [],
   }) async {
-    final headers = await _authHeaders();
-    final res = await _safeRequest(() => http.patch(
-      Uri.parse('$kApiBaseUrl/api/cleaner/me/services/$serviceId'),
-      headers: headers,
-      body: jsonEncode({
-        'name': name,
-        'icon': icon,
-        'description': description,
-        'priceType': priceType,
-        'price': price,
-        if (durationMinutes != null) 'durationMinutes': durationMinutes,
-        'durationLabel': durationLabel,
-        'features': features,
-      }),
-    ));
-    final body = _decode(res);
-    return MenuService.fromJson(body['service'] as Map<String, dynamic>);
+    return _guard(() async {
+      final id = await _cleanerId();
+      final row = await _db
+          .from('services')
+          .update({
+            'name': name,
+            'icon': icon,
+            'description': description,
+            'price_type': priceType,
+            'price_cents': (price * 100).round(),
+            'duration_minutes': durationMinutes ?? 60,
+            'duration_label': durationLabel,
+            'features': jsonEncode(features),
+          })
+          .eq('id', serviceId)
+          .eq('created_by_cleaner_id', id)
+          .select()
+          .maybeSingle();
+      if (row == null) throw ApiException("That's not one of your own proposed services.");
+      return MenuService.fromJson(row);
+    });
   }
 
   Future<List<PriceHistoryEntry>> getPriceHistory() async {
-    final headers = await _authHeaders(json: false);
-    final res = await _safeRequest(() => http.get(
-      Uri.parse('$kApiBaseUrl/api/cleaner/me/price-history'),
-      headers: headers,
-    ));
-    final body = _decode(res);
-    final list = body['history'] as List<dynamic>? ?? [];
-    return list.map((h) => PriceHistoryEntry.fromJson(h as Map<String, dynamic>)).toList();
+    return _guard(() async {
+      final id = await _cleanerId();
+      final rows = await _db
+          .from('cleaner_price_history')
+          .select('*, services(name, price_type, price_cents)')
+          .eq('cleaner_id', id)
+          .order('changed_at', ascending: false);
+      return rows.map(PriceHistoryEntry.fromJson).toList();
+    });
+  }
+
+  // ---- Availability pause (migration 20260925090000) ----
+
+  /// Pauses (false) or resumes (true) new bookings for this cleaner.
+  Future<Cleaner> setAcceptingBookings(bool accepting) async {
+    return _guard(() async {
+      final id = await _cleanerId();
+      final row = await _db.from('cleaners').update({'accepting_bookings': accepting}).eq('id', id).select().single();
+      return Cleaner.fromJson(row);
+    });
+  }
+
+  // ---- Time off (migration 20260925090000) ----
+
+  /// This cleaner's days off from today onwards, soonest first.
+  Future<List<TimeOff>> getTimeOff() async {
+    return _guard(() async {
+      final id = await _cleanerId();
+      final rows = await _db
+          .from('cleaner_time_off')
+          .select('id, date, reason')
+          .eq('cleaner_id', id)
+          .gte('date', isoDate(DateTime.now()))
+          .order('date');
+      return rows.map(TimeOff.fromJson).toList();
+    });
+  }
+
+  /// Marks every day from [first] to [last] (inclusive) as off, skipping days
+  /// already off.
+  Future<void> addTimeOff(DateTime first, DateTime last, {String? reason}) async {
+    return _guard(() async {
+      final id = await _cleanerId();
+      final existing = await _db.from('cleaner_time_off').select('date').eq('cleaner_id', id);
+      final taken = {for (final r in existing) r['date'] as String};
+      final rows = [
+        for (var d = DateTime(first.year, first.month, first.day);
+            !d.isAfter(last);
+            d = DateTime(d.year, d.month, d.day + 1))
+          if (!taken.contains(isoDate(d))) {'cleaner_id': id, 'date': isoDate(d), 'reason': ?reason},
+      ];
+      if (rows.isNotEmpty) await _db.from('cleaner_time_off').insert(rows);
+    });
+  }
+
+  Future<void> removeTimeOff(int timeOffId) async {
+    return _guard(() async {
+      final id = await _cleanerId();
+      await _db.from('cleaner_time_off').delete().eq('id', timeOffId).eq('cleaner_id', id);
+    });
+  }
+
+  // ---- Job photos (migration 20260925090000) ----
+
+  /// A job's photos, oldest first, each with a signed URL valid for an hour.
+  Future<List<JobPhoto>> listJobPhotos(int bookingId) async {
+    return _guard(() async {
+      final rows = await _db.from('job_photos').select().eq('booking_id', bookingId).order('created_at');
+      if (rows.isEmpty) return const [];
+      final signed = await _db.storage
+          .from(kJobPhotosBucket)
+          .createSignedUrlsResult([for (final r in rows) r['path'] as String], 3600);
+      // A missing file just shows no image, rather than failing the whole list.
+      final urls = {for (final s in signed.whereType<SignedUrlSuccess>()) s.path: s.signedUrl};
+      return [for (final r in rows) JobPhoto.fromJson(r, url: urls[r['path']])];
+    });
+  }
+
+  /// Uploads a before/after photo ([extension] jpg/jpeg/png/webp/heic).
+  Future<void> uploadJobPhoto(int bookingId, String kind, List<int> bytes, String extension) async {
+    final mimeByExt = {'jpg': 'jpeg', 'jpeg': 'jpeg', 'png': 'png', 'webp': 'webp', 'heic': 'heic'};
+    final mime = mimeByExt[extension.toLowerCase()];
+    if (mime == null) throw ApiException('Please choose a JPG, PNG, WEBP or HEIC photo');
+    return _guard(() async {
+      final path = '$bookingId/$kind/${DateTime.now().millisecondsSinceEpoch}.${extension.toLowerCase()}';
+      await _db.storage.from(kJobPhotosBucket).uploadBinary(
+            path,
+            Uint8List.fromList(bytes),
+            fileOptions: FileOptions(contentType: 'image/$mime'),
+          );
+      await _db.from('job_photos').insert({'booking_id': bookingId, 'kind': kind, 'path': path});
+    });
+  }
+
+  Future<void> deleteJobPhoto(JobPhoto photo) async {
+    return _guard(() async {
+      await _db.from('job_photos').delete().eq('id', photo.id);
+      await _db.storage.from(kJobPhotosBucket).remove([photo.path]);
+    });
+  }
+
+  // ---- Messages (migration 20260924180000) ----
+
+  /// Live list of every message on this cleaner's bookings (RLS limits it),
+  /// newest first — feeds the unread counts on job cards.
+  Stream<List<ChatMessage>> watchMyMessages() => _stream(() => _db
+      .from('messages')
+      .stream(primaryKey: ['id'])
+      .order('created_at')
+      .limit(500)
+      .map((rows) => rows.map(ChatMessage.fromJson).toList()));
+
+  /// Live chat for one booking, oldest first.
+  Stream<List<ChatMessage>> watchChat(int bookingId) => _stream(() => _db
+      .from('messages')
+      .stream(primaryKey: ['id'])
+      .eq('booking_id', bookingId)
+      .order('created_at', ascending: true)
+      .map((rows) => rows.map(ChatMessage.fromJson).toList()));
+
+  /// Streams report failures as an error event with a user-safe message
+  /// instead of throwing while being set up.
+  Stream<T> _stream<T>(Stream<T> Function() open) {
+    try {
+      return open().handleError((Object e) => throw ApiException("Couldn't load messages. Pull down to try again."));
+    } catch (_) {
+      return Stream.error(ApiException("Couldn't load messages. Check your connection."));
+    }
+  }
+
+  Future<void> sendMessage(int bookingId, String body) async {
+    return _guard(() async {
+      await _db.from('messages').insert({'booking_id': bookingId, 'sender_role': 'cleaner', 'body': body});
+    });
+  }
+
+  /// Marks the customer's messages on [bookingId] as read.
+  Future<void> markMessagesRead(int bookingId) async {
+    return _guard(() async {
+      await _db.rpc('mark_messages_read', params: {'p_booking_id': bookingId});
+    });
+  }
+
+  // ---- Reviews & stats ----
+
+  /// Reviews customers have left for this cleaner, newest first.
+  Future<List<Review>> getMyReviews() async {
+    return _guard(() async {
+      final id = await _cleanerId();
+      final rows = await _db
+          .from('reviews')
+          .select('booking_id, rating, tags, comment, tip_cents, reviewer_name, service_name, created_at')
+          .eq('cleaner_id', id)
+          .order('created_at', ascending: false);
+      return rows.map(Review.fromJson).toList();
+    });
+  }
+
+  /// This cleaner's completed-job count and rating, from `cleaner_stats()`.
+  Future<CleanerStats?> getMyStats() async {
+    return _guard(() async {
+      final id = await _cleanerId();
+      final rows = await _db.rpc('cleaner_stats') as List<dynamic>;
+      for (final r in rows) {
+        final row = r as Map<String, dynamic>;
+        if ((row['cleaner_id'] as num?)?.toInt() == id) return CleanerStats.fromJson(row);
+      }
+      return null; // e.g. not active yet
+    });
   }
 
   // ---- Working hours ----
@@ -552,57 +969,110 @@ class ApiClient {
   /// This cleaner's weekly working hours — a weekday missing from the list means
   /// they're off that day.
   Future<List<WorkingHours>> getMyHours() async {
-    final headers = await _authHeaders(json: false);
-    final res = await _safeRequest(() => http.get(
-      Uri.parse('$kApiBaseUrl/api/cleaner/me/hours'),
-      headers: headers,
-    ));
-    final body = _decode(res);
-    final list = body['hours'] as List<dynamic>? ?? [];
-    return list.map((h) => WorkingHours.fromJson(h as Map<String, dynamic>)).toList();
+    return _guard(() async {
+      final id = await _cleanerId();
+      final rows = await _db
+          .from('cleaner_hours')
+          .select('weekday, start_time, end_time')
+          .eq('cleaner_id', id)
+          .order('weekday');
+      return rows.map(WorkingHours.fromJson).toList();
+    });
   }
 
   /// Replaces this cleaner's whole weekly schedule in one go — send every day
   /// they work, including ones that didn't change; omit a day entirely to mark
   /// it as off.
+  ///
+  /// ponytail: same delete-then-insert caveat as [updateMyServices].
   Future<void> updateMyHours(List<WorkingHours> hours) async {
-    final headers = await _authHeaders();
-    final res = await _safeRequest(() => http.put(
-      Uri.parse('$kApiBaseUrl/api/cleaner/me/hours'),
-      headers: headers,
-      body: jsonEncode({'hours': hours.map((h) => h.toJson()).toList()}),
-    ));
-    _decode(res);
+    return _guard(() async {
+      final id = await _cleanerId();
+      await _db.from('cleaner_hours').delete().eq('cleaner_id', id);
+      if (hours.isEmpty) return;
+      await _db.from('cleaner_hours').insert([
+        for (final h in hours)
+          {
+            'cleaner_id': id,
+            'weekday': h.weekday,
+            'start_time': h.startTime,
+            'end_time': h.endTime,
+          },
+      ]);
+    });
   }
 
   // ---- Bookings ----
 
   Future<List<CleanerBooking>> getMyBookings() async {
-    final headers = await _authHeaders(json: false);
-    final res = await _safeRequest(() => http.get(
-      Uri.parse('$kApiBaseUrl/api/cleaner/bookings'),
-      headers: headers,
-    ));
-    final body = _decode(res);
-    final list = body['bookings'] as List<dynamic>? ?? [];
-    return list.map((b) => CleanerBooking.fromJson(b as Map<String, dynamic>)).toList();
+    return _guard(() async {
+      final id = await _cleanerId();
+      final rows = await _db
+          .from('bookings')
+          .select('*, services(name, slug, features)')
+          .eq('cleaner_id', id)
+          .order('date', ascending: false)
+          .order('start_time', ascending: false);
+      return rows.map(CleanerBooking.fromJson).toList();
+    });
   }
 
-  Future<void> confirmBooking(int bookingId) async {
-    final headers = await _authHeaders(json: false);
-    final res = await _safeRequest(() => http.post(
-      Uri.parse('$kApiBaseUrl/api/cleaner/bookings/$bookingId/confirm'),
-      headers: headers,
-    ));
-    _decode(res);
+  Future<void> confirmBooking(int bookingId) => _setBookingStatus(bookingId, 'confirmed');
+
+  /// "Finish job": marks the booking completed (completed_at is stamped by the
+  /// bookings_stamp_status trigger).
+  Future<void> finishJob(int bookingId) => _setBookingStatus(bookingId, 'completed');
+
+  /// "Start job": stamps started_at on one of this cleaner's confirmed bookings.
+  Future<DateTime> startJob(int bookingId) async {
+    return _guard(() async {
+      final id = await _cleanerId();
+      final now = DateTime.now();
+      final row = await _db
+          .from('bookings')
+          .update({'started_at': now.toUtc().toIso8601String()})
+          .eq('id', bookingId)
+          .eq('cleaner_id', id)
+          .eq('status', 'confirmed')
+          .select('id')
+          .maybeSingle();
+      if (row == null) throw ApiException('Only a confirmed booking of yours can be started.');
+      return now;
+    });
   }
 
-  Future<void> declineBooking(int bookingId) async {
-    final headers = await _authHeaders(json: false);
-    final res = await _safeRequest(() => http.post(
-      Uri.parse('$kApiBaseUrl/api/cleaner/bookings/$bookingId/decline'),
-      headers: headers,
-    ));
-    _decode(res);
+  Future<void> declineBooking(int bookingId) => _setBookingStatus(bookingId, 'cancelled');
+
+  /// The `cleaner_id` filter is what stops a cleaner acting on someone else's
+  /// booking, so it has to stay on both of these.
+  Future<void> _setBookingStatus(int bookingId, String status) async {
+    return _guard(() async {
+      final id = await _cleanerId();
+      final row = await _db
+          .from('bookings')
+          .update({'status': status})
+          .eq('id', bookingId)
+          .eq('cleaner_id', id)
+          .select('id')
+          .maybeSingle();
+      if (row == null) throw ApiException("That booking isn't assigned to you.");
+    });
   }
+}
+
+/// 'Sarah Wilson' -> 'SW'. Matches the `initials` the seeded cleaner rows use.
+String _initials(String name) {
+  final parts = name.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty);
+  return parts.take(2).map((p) => p[0].toUpperCase()).join();
+}
+
+/// 'Deep Oven Clean' -> `deep-oven-clean-<suffix>`. The suffix keeps two cleaners
+/// proposing the same name from colliding on the unique slug.
+String _slugify(String name) {
+  final base = name
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
+      .replaceAll(RegExp(r'^-+|-+$'), '');
+  final suffix = DateTime.now().millisecondsSinceEpoch.toRadixString(36);
+  return base.isEmpty ? 'service-$suffix' : '$base-$suffix';
 }
